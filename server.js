@@ -1,14 +1,16 @@
 const express = require('express');
+const multer = require('multer');
 const ShipStationCustomsUpdater = require('./update-customs');
+const ShopifyCustomsUpdater = require('./shopify-customs-updater');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+const upload = multer({ memory: true });
 
 app.use(express.json());
 
-// Simple status endpoint
-// Update the HTML in your root endpoint
+// Root endpoint with HTML interface
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -52,14 +54,14 @@ app.get('/', (req, res) => {
         <h2>Shopify Product Updates</h2>
         <form id="csvForm">
           <label><strong>Upload CSV to Update Shopify Products:</strong></label><br>
-          <div class="note">CSV should contain: sku, weight (in grams), hs_code, country_of_origin (2-letter codes)</div>
+          <div class="note">CSV columns: sku, title, weight (in grams), hs_code, country_of_origin (2-letter codes)</div>
           <input type="file" id="csvFile" accept=".csv" required><br>
           <button type="submit" class="shopify-btn">Update Product Weights, HS Codes & Countries</button>
         </form>
         <div class="note">
           ✓ Only updates fields with values in CSV<br>
           ✓ Skips inactive products automatically<br>
-          ✓ Matches by SKU or product title
+          ✓ Matches by SKU+title for duplicate SKUs
         </div>
       </div>
       
@@ -112,26 +114,46 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date() });
 });
 
-// Test endpoint - just fetches and displays info
+// ShipStation duplicate testing
+app.get('/test-duplicates', async (req, res) => {
+  const updater = new ShipStationCustomsUpdater();
+  res.json({ message: 'Test mode started. Check logs to see what would be deactivated.' });
+  
+  updater.findAndDeactivateDuplicates(true).catch(console.error);
+});
+
+// ShipStation duplicate deactivation
+app.post('/deactivate-duplicates', async (req, res) => {
+  const updater = new ShipStationCustomsUpdater();
+  res.json({ message: 'Deactivation started. Monitor Kinsta logs for progress.' });
+  
+  updater.findAndDeactivateDuplicates(false).catch(console.error);
+});
+
+// Shopify CSV upload endpoint
+app.post('/update-shopify-customs', upload.single('csv'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'No CSV file uploaded' });
+  }
+
+  const csvContent = req.file.buffer.toString('utf-8');
+  const updater = new ShopifyCustomsUpdater();
+  
+  res.json({ message: 'Processing CSV... Check logs for progress.' });
+  
+  updater.updateFromCSV(csvContent).catch(console.error);
+});
+
+// Legacy test endpoint
 app.get('/test', async (req, res) => {
   const updater = new ShipStationCustomsUpdater();
   res.json({ message: 'Test fetch started. Check logs for results.' });
-  
-  // Run async so we don't timeout the response
   updater.testFetchOnly().catch(console.error);
 });
 
-// Production endpoint - updates all orders (NOT IMPLEMENTED YET)
+// Legacy update endpoint
 app.post('/update', async (req, res) => {
-  const { confirm } = req.body;
-  
-  if (confirm !== 'yes-update-all') {
-    return res.status(400).json({ 
-      error: 'Please confirm by sending { "confirm": "yes-update-all" }' 
-    });
-  }
-  
-  res.json({ message: 'Update functionality not implemented yet. Use /test first.' });
+  res.json({ message: 'This endpoint is not implemented. Use specific function endpoints.' });
 });
 
 app.listen(PORT, () => {
