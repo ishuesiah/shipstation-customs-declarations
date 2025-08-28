@@ -162,8 +162,9 @@ class ShipStationProductSync {
             
             if (Object.keys(updates).length > 0) {
               try {
-                // Include the productId in the update
+                // Include the productId AND sku in the update (SKU is required by ShipStation API)
                 updates.productId = existingProduct.productId;
+                updates.sku = existingProduct.sku; // SKU is required even when updating by productId
                 
                 await shipstationAPI.put(`/products/${existingProduct.productId}`, updates);
                 
