@@ -18,100 +18,165 @@ const shipstation = axios.create({
   }
 });
 
-// Add rate limiting to respect ShipStation's 40 requests per minute limit
+// Add rate limiting
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 class ShipStationCustomsUpdater {
   constructor() {
-    this.ordersFound = 0;
-    this.multiItemOrders = 0;
+    this.products = [];
+    this.duplicates = {};
+    this.deactivated = 0;
+    this.errors = [];
   }
 
-  // Fetch orders that need updating (US orders, awaiting shipment, multi-item)
-  async fetchOrdersToUpdate(page = 1) {
-    try {
-      console.log(`Fetching page ${page} of orders...`);
-      
-      const response = await shipstation.get('/orders', {
-        params: {
-          orderStatus: 'awaiting_shipment',
-          shipCountry: 'US',
-          page: page,
-          pageSize: 100
-        }
-      });
-
-      // Log what we got
-      console.log(`Total orders found: ${response.data.total}`);
-      console.log(`Total pages: ${response.data.pages}`);
-      console.log(`Orders on this page: ${response.data.orders.length}`);
-      
-      // Filter for orders with 2+ items
-      const multiItemOrders = response.data.orders.filter(order => 
-        order.items && order.items.length > 1
-      );
-
-      console.log(`Multi-item orders on this page: ${multiItemOrders.length}`);
-      
-      // Log first order details if any exist
-      if (multiItemOrders.length > 0) {
-        console.log('\nFirst multi-item order details:');
-        console.log(`Order Number: ${multiItemOrders[0].orderNumber}`);
-        console.log(`Order ID: ${multiItemOrders[0].orderId}`);
-        console.log(`Items: ${multiItemOrders[0].items.length}`);
-        console.log(`Customer: ${multiItemOrders[0].shipTo.name}`);
-      }
-      
-      return {
-        orders: multiItemOrders,
-        hasMore: response.data.pages > page,
-        totalPages: response.data.pages
-      };
-    } catch (error) {
-      console.error('Error fetching orders:', error.response?.data || error.message);
-      throw error;
-    }
-  }
-
-  // Just fetch and display order info - no updates
-  async testFetchOnly() {
+  // Find and deactivate duplicate products - keeping most recent
+  async findAndDeactivateDuplicates(testMode = true) {
     console.log('========================================');
-    console.log('TEST MODE - FETCH ONLY (NO UPDATES)');
+    console.log(testMode ? 'TEST MODE - WILL SHOW WHAT WOULD BE DEACTIVATED' : 'PRODUCTION MODE - WILL DEACTIVATE DUPLICATES');
     console.log('========================================\n');
+    console.log('Strategy: Keep most recent product, deactivate older duplicates\n');
     
     try {
-      // Test basic connection first
-      console.log('Testing API connection...');
-      const testResponse = await shipstation.get('/stores');
-      console.log(`✓ API Connection successful. Found ${testResponse.data.length} store(s)\n`);
+      let page = 1;
+      let hasMore = true;
+      const allProducts = [];
       
-      // Now fetch orders
-      const { orders, hasMore, totalPages } = await this.fetchOrdersToUpdate(1);
-      
-      this.ordersFound = orders.length;
-      
-      // Display summary
-      console.log('\n========================================');
-      console.log('FETCH TEST COMPLETE');
-      console.log('========================================');
-      console.log(`Total multi-item US orders found: ${this.ordersFound}`);
-      console.log(`Ready to update when you're ready!`);
-      
-      // Show first 5 orders that would be updated
-      if (orders.length > 0) {
-        console.log('\nFirst 5 orders that would be updated:');
-        orders.slice(0, 5).forEach(order => {
-          console.log(`- Order ${order.orderNumber}: ${order.items.length} items`);
+      // Fetch all products
+      while (hasMore) {
+        console.log(`Fetching products page ${page}...`);
+        const response = await shipstation.get('/products', {
+          params: {
+            page: page,
+            pageSize: 500
+          }
         });
+        
+        allProducts.push(...response.data.products);
+        hasMore = response.data.pages > page;
+        page++;
+        await delay(500);
+      }
+      
+      console.log(`Total products found: ${allProducts.length}\n`);
+      
+      // Group by SKU to find duplicates
+      const skuGroups = {};
+      allProducts.forEach(product => {
+        const sku = product.sku ? product.sku.trim() : 'NO_SKU';
+        if (!skuGroups[sku]) {
+          skuGroups[sku] = [];
+        }
+        skuGroups[sku].push(product);
+      });
+      
+      // Process duplicates
+      console.log('========================================');
+      console.log('DUPLICATE ANALYSIS:');
+      console.log('========================================\n');
+      
+      let duplicateSkuCount = 0;
+      let totalDuplicateProducts = 0;
+      const deactivationPlan = [];
+      
+      Object.keys(skuGroups).forEach(sku => {
+        if (skuGroups[sku].length > 1) {
+          duplicateSkuCount++;
+          totalDuplicateProducts += skuGroups[sku].length - 1;
+          
+          // Sort products by date (most recent first)
+          // Use modifyDate first, fall back to createDate if modifyDate is null
+          const sortedProducts = skuGroups[sku].sort((a, b) => {
+            const dateA = new Date(a.modifyDate || a.createDate);
+            const dateB = new Date(b.modifyDate || b.createDate);
+            return dateB - dateA; // Most recent first
+          });
+          
+          const keepProduct = sortedProducts[0]; // Keep the most recent
+          const deactivateProducts = sortedProducts.slice(1); // Deactivate older ones
+          
+          console.log(`\nSKU: ${sku}`);
+          console.log(`  Total instances: ${skuGroups[sku].length}`);
+          console.log(`  KEEP (Most Recent): Product ID ${keepProduct.productId}`);
+          console.log(`    Name: ${keepProduct.name}`);
+          console.log(`    Modified: ${keepProduct.modifyDate || 'Never'}`);
+          console.log(`    Created: ${keepProduct.createDate}`);
+          console.log(`    HS Code: ${keepProduct.customsTariffNo || 'Not set'}`);
+          console.log(`    Customs Desc: ${keepProduct.customsDescription || 'Not set'}`);
+          console.log(`    Active: ${keepProduct.active}`);
+          
+          console.log(`  DEACTIVATE (${deactivateProducts.length} older duplicates):`);
+          deactivateProducts.forEach(product => {
+            console.log(`    - Product ID ${product.productId}`);
+            console.log(`      Name: ${product.name}`);
+            console.log(`      Modified: ${product.modifyDate || 'Never'}`);
+            console.log(`      Created: ${product.createDate}`);
+            console.log(`      Active: ${product.active}`);
+            
+            // Only add to deactivation plan if currently active
+            if (product.active) {
+              deactivationPlan.push(product);
+            }
+          });
+        }
+      });
+      
+      console.log('\n========================================');
+      console.log('SUMMARY:');
+      console.log('========================================');
+      console.log(`Unique SKUs with duplicates: ${duplicateSkuCount}`);
+      console.log(`Total duplicate products to deactivate: ${deactivationPlan.length}`);
+      console.log(`Products that will remain active: ${allProducts.length - deactivationPlan.length}\n`);
+      
+      if (!testMode && deactivationPlan.length > 0) {
+        console.log('Starting deactivation process...\n');
+        
+        for (const product of deactivationPlan) {
+          try {
+            // Update product to set active = false
+            await shipstation.put(`/products/${product.productId}`, {
+              active: false
+            });
+            
+            this.deactivated++;
+            console.log(`✓ Deactivated: ${product.name} (ID: ${product.productId})`);
+            await delay(1500); // Rate limiting
+            
+          } catch (error) {
+            this.errors.push({
+              productId: product.productId,
+              name: product.name,
+              error: error.response?.data || error.message
+            });
+            console.error(`✗ Failed to deactivate ${product.name}:`, error.response?.data || error.message);
+          }
+        }
+        
+        console.log('\n========================================');
+        console.log('DEACTIVATION COMPLETE');
+        console.log('========================================');
+        console.log(`Successfully deactivated: ${this.deactivated} products`);
+        console.log(`Errors: ${this.errors.length}`);
+        
+        if (this.errors.length > 0) {
+          console.log('\nFailed deactivations:');
+          this.errors.forEach(err => {
+            console.log(`  - ${err.name} (ID: ${err.productId}): ${err.error}`);
+          });
+        }
+      } else if (testMode && deactivationPlan.length > 0) {
+        console.log('⚠️  TEST MODE - No changes made');
+        console.log('Run with testMode = false to actually deactivate duplicates');
+      } else {
+        console.log('No duplicates to deactivate!');
       }
       
     } catch (error) {
-      console.error('Fatal error:', error);
-      if (error.response) {
-        console.error('Response status:', error.response.status);
-        console.error('Response data:', error.response.data);
-      }
+      console.error('Error:', error.response?.data || error.message);
     }
+  }
+
+  async testFetchOnly() {
+    await this.findAndDeactivateDuplicates(true); // Test mode
   }
 }
 
