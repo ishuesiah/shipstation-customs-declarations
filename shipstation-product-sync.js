@@ -121,7 +121,8 @@ class ShipStationProductSync {
         
         console.log(`Fetched page ${page}: ${products.length} products`);
         
-        hasMore = products.length === pageSize;
+        // Continue if we got any products (not just if we got exactly pageSize)
+        hasMore = products.length > 0;
         page++;
         
         // Rate limiting
