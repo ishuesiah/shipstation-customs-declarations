@@ -163,7 +163,7 @@ async function main() {
 }
 
 // Only run if this is the main module
-if (require.main === module) {
+if (typeof require !== 'undefined' && require.main === module) {
   main();
 }
 
