@@ -184,7 +184,7 @@ app.get('/', (req, res) => {
       </script>
     </body>
     </html>
-  \`);
+  `);
 });
 
 // Health check endpoint - simplified for Kinsta
@@ -226,7 +226,7 @@ app.post('/test-order-customs/:orderNumber', async (req, res) => {
   const updater = new OrderCustomsUpdater();
   const orderNumber = req.params.orderNumber;
   
-  res.json({ message: \`Testing customs update on order \${orderNumber}. Check logs for details.\` });
+  res.json({ message: `Testing customs update on order ${orderNumber}. Check logs for details.` });
   
   updater.updateSingleOrder(orderNumber).catch(console.error);
 });
@@ -283,5 +283,5 @@ app.post('/update', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(\`Server running on port \${PORT}\`);
+  console.log(`Server running on port ${PORT}`);
 });
