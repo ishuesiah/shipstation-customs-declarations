@@ -53,24 +53,7 @@ app.get('/', (req, res) => {
   </button>
 </div>
 
-<script>
-function testSingleOrder() {
-  const orderNumber = document.getElementById('testOrderNumber').value;
-  if (!orderNumber) {
-    alert('Please enter an order number');
-    return;
-  }
-  
-  if (confirm(`Test customs update on order ${orderNumber}?`)) {
-    document.getElementById('result').innerHTML = `Testing order ${orderNumber}...`;
-    fetch(`/test-order-customs/${orderNumber}`, { method: 'POST' })
-      .then(res => res.json())
-      .then(data => {
-        document.getElementById('result').innerHTML = data.message;
-      });
-  }
-}
-</script>
+
         <h2>ShipStation Product Management</h2>
         <button class="test-btn" onclick="testDuplicates()">Test Mode - Show Duplicates</button><br>
         <button onclick="deactivateDuplicates()">⚠️ Deactivate All Duplicate Products</button>
@@ -159,6 +142,24 @@ function applyShopifyRules() {
           document.getElementById('result').innerHTML = data.message + ' - Check Kinsta logs for details.';
         });
       </script>
+      <script>
+function testSingleOrder() {
+  const orderNumber = document.getElementById('testOrderNumber').value;
+  if (!orderNumber) {
+    alert('Please enter an order number');
+    return;
+  }
+  
+  if (confirm(`Test customs update on order ${orderNumber}?`)) {
+    document.getElementById('result').innerHTML = `Testing order ${orderNumber}...`;
+    fetch(`/test-order-customs/${orderNumber}`, { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById('result').innerHTML = data.message;
+      });
+  }
+}
+</script>
     </body>
     </html>
   `);
