@@ -19,6 +19,7 @@ class ShopifyCustomsUpdater {
     this.updated = 0;
     this.errors = [];
     this.skipped = 0;
+    this.skippedInactive = 0;
     this.matchedBySku = 0;
     this.matchedByTitle = 0;
   }
@@ -27,21 +28,18 @@ class ShopifyCustomsUpdater {
   parseTitle(fullTitle) {
     if (!fullTitle) return { product: '', variant: '' };
     
-    // Handle titles with "Imperfect" - it's part of the product name
     const parts = fullTitle.split(' - ');
     
     if (parts.length === 1) {
       return { product: fullTitle, variant: '' };
     }
     
-    // If "Imperfect" appears early, it's probably part of product title
     let productParts = [parts[0]];
     let variantParts = [];
     let foundVariantStart = false;
     
     for (let i = 1; i < parts.length; i++) {
       const part = parts[i];
-      // If we haven't found variant yet and part contains "Imperfect" or similar product-like terms
       if (!foundVariantStart && part.toLowerCase().includes('imperfect')) {
         productParts.push(part);
       } else {
@@ -65,23 +63,19 @@ class ShopifyCustomsUpdater {
       return variantsBySku[sku];
     }
     
-    // Second try: match by title parsing
+    // Second try: match by title if provided
     const fullTitle = record.title || record.product_title || record.name || '';
     if (!fullTitle) return null;
     
     const { product: csvProduct, variant: csvVariant } = this.parseTitle(fullTitle);
     
-    // Try to find matching product and variant
     for (const [productTitle, variants] of Object.entries(productVariantMap)) {
-      // Fuzzy product match - check if titles are similar enough
       if (this.titlesMatch(productTitle, csvProduct)) {
-        // If no variant specified in CSV, use default variant
         if (!csvVariant && variants.length === 1) {
           this.matchedByTitle++;
           return variants[0];
         }
         
-        // Try to match variant
         for (const variant of variants) {
           if (this.titlesMatch(variant.title, csvVariant) || 
               this.titlesMatch(variant.option1, csvVariant) ||
@@ -97,24 +91,19 @@ class ShopifyCustomsUpdater {
     return null;
   }
 
-  // Fuzzy title matching - handles minor differences
   titlesMatch(title1, title2) {
     if (!title1 || !title2) return false;
     
-    // Normalize for comparison
     const normalize = (str) => str
       .toLowerCase()
-      .replace(/[^\w\s]/g, '') // Remove punctuation
-      .replace(/\s+/g, ' ')     // Normalize spaces
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
       .trim();
     
     const normalized1 = normalize(title1);
     const normalized2 = normalize(title2);
     
-    // Exact match after normalization
     if (normalized1 === normalized2) return true;
-    
-    // Check if one contains the other (for variant matching)
     if (normalized1.includes(normalized2) || normalized2.includes(normalized1)) {
       return true;
     }
@@ -124,11 +113,11 @@ class ShopifyCustomsUpdater {
 
   async updateFromCSV(csvContent) {
     console.log('========================================');
-    console.log('SHOPIFY CUSTOMS UPDATE');
+    console.log('SHOPIFY PRODUCT UPDATE');
     console.log('========================================\n');
+    console.log('Updating: Weight, HS Code, Country of Origin\n');
 
     try {
-      // Parse CSV - flexible column detection
       const records = parse(csvContent, {
         columns: true,
         skip_empty_lines: true,
@@ -137,30 +126,61 @@ class ShopifyCustomsUpdater {
 
       console.log(`Found ${records.length} records in CSV\n`);
 
-      // Fetch all products with variants
       console.log('Fetching Shopify products...');
-      const { variantsBySku, productVariantMap } = await this.fetchAllProducts();
+      const { variantsBySku, productVariantMap, inactiveProducts } = await this.fetchAllProducts();
       const totalVariants = Object.values(productVariantMap).flat().length;
       console.log(`Found ${totalVariants} variants across ${Object.keys(productVariantMap).length} products\n`);
 
-      // Process each CSV record
       for (const record of records) {
-        // Find matching variant using multiple strategies
         const variant = this.findMatchingVariant(record, variantsBySku, productVariantMap);
         
         if (!variant) {
-          const identifier = record.sku || record.title || record.product_title || 'Unknown';
+          const identifier = record.sku || record.title || 'Unknown';
           console.log(`⚠️ No match found: ${identifier}`);
           this.skipped++;
           continue;
         }
 
-        // Check if update needed
-        const needsUpdate = 
-          variant.harmonized_system_code !== (record.hs_code || record.harmonized_code) ||
-          variant.country_code_of_origin !== (record.country_of_origin || record.country || 'CA');
+        // Skip inactive products
+        if (inactiveProducts.has(variant.product_id)) {
+          console.log(`⏭️ Skipping inactive product: ${variant.product_title}`);
+          this.skippedInactive++;
+          continue;
+        }
 
-        if (!needsUpdate) {
+        // Build update object - only include fields that have values in CSV
+        const updateData = { id: variant.id };
+        let fieldsToUpdate = [];
+
+        // Check weight (convert to grams if needed)
+        if (record.weight || record.weight_grams) {
+          const newWeight = parseFloat(record.weight_grams || record.weight);
+          if (!isNaN(newWeight) && newWeight !== variant.weight) {
+            updateData.weight = newWeight;
+            updateData.weight_unit = 'g'; // Always use grams
+            fieldsToUpdate.push('weight');
+          }
+        }
+
+        // Check HS code
+        const hsCode = record.hs_code || record.harmonized_code || record.tariff_code;
+        if (hsCode && hsCode !== variant.harmonized_system_code) {
+          updateData.harmonized_system_code = hsCode;
+          fieldsToUpdate.push('hs_code');
+        }
+
+        // Check country of origin (expand 2-letter codes)
+        const countryCode = record.country_of_origin || record.country;
+        if (countryCode) {
+          const expandedCountry = this.expandCountryCode(countryCode);
+          if (expandedCountry !== variant.country_code_of_origin) {
+            updateData.country_code_of_origin = expandedCountry;
+            fieldsToUpdate.push('country');
+          }
+        }
+
+        // Skip if nothing to update
+        if (fieldsToUpdate.length === 0) {
           console.log(`✓ Already up to date: ${variant.product_title} - ${variant.title}`);
           this.skipped++;
           continue;
@@ -169,17 +189,12 @@ class ShopifyCustomsUpdater {
         // Update variant
         try {
           await shopifyAPI.put(`/variants/${variant.id}.json`, {
-            variant: {
-              id: variant.id,
-              harmonized_system_code: record.hs_code || record.harmonized_code || '',
-              country_code_of_origin: record.country_of_origin || record.country || 'CA'
-            }
+            variant: updateData
           });
 
           this.updated++;
-          console.log(`✅ Updated: ${variant.product_title} - ${variant.title}`);
+          console.log(`✅ Updated [${fieldsToUpdate.join(', ')}]: ${variant.product_title} - ${variant.title}`);
           
-          // Rate limiting
           await new Promise(resolve => setTimeout(resolve, 550));
           
         } catch (error) {
@@ -195,7 +210,8 @@ class ShopifyCustomsUpdater {
       console.log('UPDATE COMPLETE');
       console.log('========================================');
       console.log(`✅ Updated: ${this.updated} variants`);
-      console.log(`⚠️ Skipped: ${this.skipped} items`);
+      console.log(`⏭️ Skipped (inactive): ${this.skippedInactive} variants`);
+      console.log(`⚠️ Skipped (no changes/not found): ${this.skipped} items`);
       console.log(`❌ Errors: ${this.errors.length} variants`);
       console.log(`\nMatching stats:`);
       console.log(`  Matched by SKU: ${this.matchedBySku}`);
@@ -207,9 +223,21 @@ class ShopifyCustomsUpdater {
     }
   }
 
+  expandCountryCode(code) {
+    const countryMap = {
+      'CA': 'CA', // Canada
+      'US': 'US', // United States
+      'CN': 'CN', // China
+      'JP': 'JP', // Japan
+      // Add more as needed
+    };
+    return countryMap[code.toUpperCase()] || code.toUpperCase();
+  }
+
   async fetchAllProducts() {
     const variantsBySku = {};
-    const productVariantMap = {}; // product title -> variants
+    const productVariantMap = {};
+    const inactiveProducts = new Set();
     let hasNextPage = true;
     let pageInfo = null;
 
@@ -221,11 +249,16 @@ class ShopifyCustomsUpdater {
       const response = await shopifyAPI.get(query);
       
       response.data.products.forEach(product => {
+        // Track inactive products
+        if (product.status !== 'active') {
+          inactiveProducts.add(product.id);
+        }
+
         productVariantMap[product.title] = [];
         
         product.variants.forEach(variant => {
-          // Add product title to variant for easier logging
           variant.product_title = product.title;
+          variant.product_id = product.id;
           
           if (variant.sku) {
             variantsBySku[variant.sku.trim().toUpperCase()] = variant;
@@ -235,7 +268,6 @@ class ShopifyCustomsUpdater {
         });
       });
 
-      // Check for next page
       const linkHeader = response.headers['link'];
       if (linkHeader && linkHeader.includes('rel="next"')) {
         const match = linkHeader.match(/page_info=([^>]+)>; rel="next"/);
@@ -248,7 +280,7 @@ class ShopifyCustomsUpdater {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    return { variantsBySku, productVariantMap };
+    return { variantsBySku, productVariantMap, inactiveProducts };
   }
 }
 
