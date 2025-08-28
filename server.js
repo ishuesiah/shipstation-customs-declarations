@@ -71,30 +71,22 @@ app.get('/', (req, res) => {
       
       <div id="result"></div>
       <!-- Add this section to your existing HTML interface -->
-<div class="section" style="background: #f0f8ff;">
-  <h2>🔄 ShipStation Product Sync (REPLACES/UPDATES)</h2>
-  <p style="color: #d9534f;">
-    <strong>This will UPDATE existing products by SKU - no more duplicates!</strong>
-  </p>
-  <p>CSV columns: SKU, Name, HS Code, Weight, Price, Country of Origin, etc.</p>
-  <form action="/sync-shipstation-products" method="POST" enctype="multipart/form-data">
-    <input type="file" name="csv" accept=".csv" required>
-    <div style="margin: 10px 0;">
-      <label>
-        <input type="checkbox" name="updateExisting" value="true" checked>
-        Update existing products
-      </label><br>
-      <label>
-        <input type="checkbox" name="createNew" value="true">
-        Create new products (if SKU doesn't exist)
-      </label>
-    </div>
-    <button type="submit" style="background: #5cb85c;" 
-            onclick="return confirm('This will UPDATE/REPLACE product data in ShipStation. Continue?')">
-      Sync Products (No Duplicates!)
-    </button>
-  </form>
-</div>
+<button onclick="autoCustoms()" style="background: #17a2b8;">
+  🤖 Auto-Assign Customs Data (Smart Rules)
+</button>
+
+<script>
+function autoCustoms() {
+  if (confirm('This will intelligently assign customs data based on product names. Continue?')) {
+    document.getElementById('result').innerHTML = 'Running intelligent customs assignment...';
+    fetch('/auto-customs', { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById('result').innerHTML = data.message;
+      });
+  }
+}
+</script>
       <script>
         function testDuplicates() {
           document.getElementById('result').innerHTML = 'Running test mode... Check Kinsta logs for details.';
