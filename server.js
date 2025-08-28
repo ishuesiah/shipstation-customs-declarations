@@ -46,6 +46,31 @@ app.get('/', (req, res) => {
       <h1>E-commerce Operations Manager</h1>
       
       <div class="section">
+      <div style="margin: 10px 0;">
+  <input type="text" id="testOrderNumber" placeholder="Order # to test (e.g. 52231)" style="padding: 8px;">
+  <button onclick="testSingleOrder()" style="background: #fd7e14;">
+    🧪 Test Single Order
+  </button>
+</div>
+
+<script>
+function testSingleOrder() {
+  const orderNumber = document.getElementById('testOrderNumber').value;
+  if (!orderNumber) {
+    alert('Please enter an order number');
+    return;
+  }
+  
+  if (confirm(`Test customs update on order ${orderNumber}?`)) {
+    document.getElementById('result').innerHTML = `Testing order ${orderNumber}...`;
+    fetch(`/test-order-customs/${orderNumber}`, { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById('result').innerHTML = data.message;
+      });
+  }
+}
+</script>
         <h2>ShipStation Product Management</h2>
         <button class="test-btn" onclick="testDuplicates()">Test Mode - Show Duplicates</button><br>
         <button onclick="deactivateDuplicates()">⚠️ Deactivate All Duplicate Products</button>
