@@ -37,64 +37,63 @@ app.get('/', (req, res) => {
         .test-btn:hover { background-color: #0056b3; }
         .shopify-btn { background-color: #28a745; }
         .shopify-btn:hover { background-color: #218838; }
+        .custom-btn { background-color: #17a2b8; }
+        .custom-btn:hover { background-color: #117a8b; }
+        .order-btn { background-color: #fd7e14; }
+        .order-btn:hover { background-color: #e56a0c; }
         #result { margin-top: 20px; padding: 10px; background: #f8f9fa; border-radius: 4px; }
         input[type="file"] { margin: 10px 0; }
+        input[type="text"] { padding: 8px; margin: 5px; }
         .note { color: #666; font-size: 14px; margin: 10px 0; }
       </style>
     </head>
     <body>
       <h1>E-commerce Operations Manager</h1>
       
+      <!-- ShipStation Section -->
       <div class="section">
-      <div style="margin: 10px 0;">
-  <input type="text" id="testOrderNumber" placeholder="Order # to test (e.g. 52231)" style="padding: 8px;">
-  <button onclick="testSingleOrder()" style="background: #fd7e14;">
-    🧪 Test Single Order
-  </button>
-</div>
-
-
-        <h2>ShipStation Product Management</h2>
-        <button class="test-btn" onclick="testDuplicates()">Test Mode - Show Duplicates</button><br>
+        <h2>🚢 ShipStation Management</h2>
+        
+        <h3>Product Deduplication</h3>
+        <button class="test-btn" onclick="testDuplicates()">Test Mode - Show Duplicates</button>
         <button onclick="deactivateDuplicates()">⚠️ Deactivate All Duplicate Products</button>
+        
+        <h3>Customs Data Management</h3>
+        <button class="custom-btn" onclick="autoCustoms()">🤖 Auto-Assign Customs Data (Smart Rules)</button>
+        
+        <h3>Order Customs Updates</h3>
+        <div style="margin: 10px 0;">
+          <input type="text" id="testOrderNumber" placeholder="Order # to test (e.g. 52231)">
+          <button class="order-btn" onclick="testSingleOrder()">🧪 Test Single Order</button>
+        </div>
+        <button class="order-btn" onclick="updateAllOrders()">📦 Update All USA Orders Awaiting Shipment</button>
       </div>
       
+      <!-- Shopify Section -->
       <div class="section">
-        <h2>Shopify Product Updates</h2>
+        <h2>🛍️ Shopify Product Updates</h2>
+        
+        <h3>CSV Upload</h3>
         <form id="csvForm">
-          <label><strong>Upload CSV to Update Shopify Products:</strong></label><br>
           <div class="note">CSV columns: sku, title, weight (in grams), hs_code, country_of_origin (2-letter codes)</div>
-          <input type="file" id="csvFile" accept=".csv" required><br>
-          <button type="submit" class="shopify-btn">Update Product Weights, HS Codes & Countries</button>
+          <input type="file" id="csvFile" accept=".csv" required>
+          <button type="submit" class="shopify-btn">Upload CSV & Update Products</button>
         </form>
         <div class="note">
           ✓ Only updates fields with values in CSV<br>
           ✓ Skips inactive products automatically<br>
           ✓ Matches by SKU+title for duplicate SKUs
         </div>
+        
+        <h3>Rule-Based Updates</h3>
+        <button class="shopify-btn" onclick="applyShopifyRules()">Apply HS/Weight Rules to All Products</button>
       </div>
-      <button class="shopify-btn" onclick="applyShopifyRules()">Apply HS/Weight Rules to All Shopify Products</button>
-
       
       <div id="result"></div>
-      <!-- Add this section to your existing HTML interface -->
-<button onclick="autoCustoms()" style="background: #17a2b8;">
-  🤖 Auto-Assign Customs Data (Smart Rules)
-</button>
-
-<script>
-function autoCustoms() {
-  if (confirm('This will intelligently assign customs data based on product names. Continue?')) {
-    document.getElementById('result').innerHTML = 'Running intelligent customs assignment...';
-    fetch('/auto-customs', { method: 'POST' })
-      .then(res => res.json())
-      .then(data => {
-        document.getElementById('result').innerHTML = data.message;
-      });
-  }
-}
-</script>
+      
+      <!-- All scripts in one place -->
       <script>
+        // ShipStation functions
         function testDuplicates() {
           document.getElementById('result').innerHTML = 'Running test mode... Check Kinsta logs for details.';
           fetch('/test-duplicates')
@@ -114,18 +113,59 @@ function autoCustoms() {
               });
           }
         }
-
-function applyShopifyRules() {
-  if (confirm('This will update all active Shopify products based on title rules. Continue?')) {
-    document.getElementById('result').innerHTML = 'Applying rules to all products... This may take 10-20 minutes.';
-    fetch('/apply-shopify-rules', { method: 'POST' })
-      .then(res => res.json())
-      .then(data => {
-        document.getElementById('result').innerHTML = data.message;
-      });
-  }
-}
-
+        
+        function autoCustoms() {
+          if (confirm('This will intelligently assign customs data based on product names. Continue?')) {
+            document.getElementById('result').innerHTML = 'Running intelligent customs assignment...';
+            fetch('/auto-customs', { method: 'POST' })
+              .then(res => res.json())
+              .then(data => {
+                document.getElementById('result').innerHTML = data.message;
+              });
+          }
+        }
+        
+        function testSingleOrder() {
+          const orderNumber = document.getElementById('testOrderNumber').value;
+          if (!orderNumber) {
+            alert('Please enter an order number');
+            return;
+          }
+          
+          if (confirm(\`Test customs update on order \${orderNumber}?\`)) {
+            document.getElementById('result').innerHTML = \`Testing order \${orderNumber}...\`;
+            fetch(\`/test-order-customs/\${orderNumber}\`, { method: 'POST' })
+              .then(res => res.json())
+              .then(data => {
+                document.getElementById('result').innerHTML = data.message;
+              });
+          }
+        }
+        
+        function updateAllOrders() {
+          if (confirm('Update customs data for all USA orders awaiting shipment? This may take several minutes.')) {
+            document.getElementById('result').innerHTML = 'Updating USA orders... Check Kinsta logs for progress.';
+            fetch('/update-order-customs', { method: 'POST' })
+              .then(res => res.json())
+              .then(data => {
+                document.getElementById('result').innerHTML = data.message;
+              });
+          }
+        }
+        
+        // Shopify functions
+        function applyShopifyRules() {
+          if (confirm('This will update all active Shopify products based on title rules. Continue?')) {
+            document.getElementById('result').innerHTML = 'Applying rules to all products... This may take 10-20 minutes.';
+            fetch('/apply-shopify-rules', { method: 'POST' })
+              .then(res => res.json())
+              .then(data => {
+                document.getElementById('result').innerHTML = data.message;
+              });
+          }
+        }
+        
+        // CSV form handler
         document.getElementById('csvForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           const file = document.getElementById('csvFile').files[0];
@@ -142,35 +182,19 @@ function applyShopifyRules() {
           document.getElementById('result').innerHTML = data.message + ' - Check Kinsta logs for details.';
         });
       </script>
-      <script>
-function testSingleOrder() {
-  const orderNumber = document.getElementById('testOrderNumber').value;
-  if (!orderNumber) {
-    alert('Please enter an order number');
-    return;
-  }
-  
-  if (confirm(`Test customs update on order ${orderNumber}?`)) {
-    document.getElementById('result').innerHTML = `Testing order ${orderNumber}...`;
-    fetch(`/test-order-customs/${orderNumber}`, { method: 'POST' })
-      .then(res => res.json())
-      .then(data => {
-        document.getElementById('result').innerHTML = data.message;
-      });
-  }
-}
-</script>
     </body>
     </html>
-  `);
+  \`);
 });
 
-// Health check endpoint
+// Health check endpoint - simplified for Kinsta
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date() });
+  res.status(200).send('OK');
 });
 
-// ShipStation duplicate testing
+// ==================== SHIPSTATION ENDPOINTS ====================
+
+// Test duplicates (GET - no changes)
 app.get('/test-duplicates', async (req, res) => {
   const updater = new ShipStationCustomsUpdater();
   res.json({ message: 'Test mode started. Check logs to see what would be deactivated.' });
@@ -178,7 +202,7 @@ app.get('/test-duplicates', async (req, res) => {
   updater.findAndDeactivateDuplicates(true).catch(console.error);
 });
 
-// ShipStation duplicate deactivation
+// Deactivate duplicates (POST - makes changes)
 app.post('/deactivate-duplicates', async (req, res) => {
   const updater = new ShipStationCustomsUpdater();
   res.json({ message: 'Deactivation started. Monitor Kinsta logs for progress.' });
@@ -186,7 +210,43 @@ app.post('/deactivate-duplicates', async (req, res) => {
   updater.findAndDeactivateDuplicates(false).catch(console.error);
 });
 
-// Shopify CSV upload endpoint
+// Auto-assign customs data using rules engine
+app.post('/auto-customs', async (req, res) => {
+  const CustomsRulesEngine = require('./customs-rules-engine');
+  const engine = new CustomsRulesEngine();
+  
+  res.json({ message: 'Intelligent customs update started. Check logs for details.' });
+  
+  engine.updateAllProducts().catch(console.error);
+});
+
+// Test customs update on single order
+app.post('/test-order-customs/:orderNumber', async (req, res) => {
+  const OrderCustomsUpdater = require('./order-customs-updater');
+  const updater = new OrderCustomsUpdater();
+  const orderNumber = req.params.orderNumber;
+  
+  res.json({ message: \`Testing customs update on order \${orderNumber}. Check logs for details.\` });
+  
+  updater.updateSingleOrder(orderNumber).catch(console.error);
+});
+
+// Update customs for all USA orders
+app.post('/update-order-customs', async (req, res) => {
+  const OrderCustomsUpdater = require('./order-customs-updater');
+  const updater = new OrderCustomsUpdater();
+  
+  res.json({ message: 'Order customs update started for USA orders. Check logs for details.' });
+  
+  updater.updateOrders({ 
+    countryCode: 'US',
+    orderStatus: 'awaiting_shipment'
+  }).catch(console.error);
+});
+
+// ==================== SHOPIFY ENDPOINTS ====================
+
+// Update Shopify products from CSV
 app.post('/update-shopify-customs', upload.single('csv'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: 'No CSV file uploaded' });
@@ -199,74 +259,17 @@ app.post('/update-shopify-customs', upload.single('csv'), async (req, res) => {
   
   updater.updateFromCSV(csvContent).catch(console.error);
 });
-//shopify rules updater
+
+// Apply rules to all Shopify products
 app.post('/apply-shopify-rules', async (req, res) => {
   const updater = new ShopifyRulesUpdater();
   res.json({ message: 'Applying rules to all Shopify products. Check logs for progress.' });
   
   updater.applyRules().catch(console.error);
 });
-//
-app.post('/auto-customs', async (req, res) => {
-  const CustomsRulesEngine = require('./customs-rules-engine');
-  const engine = new CustomsRulesEngine();
-  
-  res.json({ message: 'Intelligent customs update started. Check logs for details.' });
-  
-  engine.updateAllProducts().catch(console.error);
-});
 
-//endpoint for sync
-app.post('/sync-shipstation-products', upload.single('csv'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).send('<h1>Error</h1><p>Please upload a CSV file</p>');
-  }
+// ==================== LEGACY ENDPOINTS ====================
 
-  try {
-    const csvData = req.file.buffer.toString('utf-8');
-    const syncer = new ShipStationProductSync(csvData);
-    
-    // Get options from form
-    const options = {
-      updateExisting: req.body.updateExisting !== 'false',
-      createNew: req.body.createNew === 'true'
-    };
-    
-    const results = await syncer.syncProducts(options);
-    
-    res.send(`
-      <h1>ShipStation Product Sync Complete</h1>
-      <p>✅ Updated: ${results.updated} products</p>
-      <p>✨ Created: ${results.created} new products</p>
-      <p>⏭️ Skipped (no changes): ${results.skipped} products</p>
-      <p>❌ Errors: ${results.errors.length}</p>
-      ${results.errors.length > 0 ? `
-        <h3>Errors:</h3>
-        <ul>
-          ${results.errors.map(e => `<li>${e.sku} (${e.action}): ${JSON.stringify(e.error)}</li>`).join('')}
-        </ul>
-      ` : ''}
-      <br>
-      <a href="/">Back to main page</a>
-    `);
-  } catch (error) {
-    console.error('Product sync error:', error);
-    res.status(500).send(`
-      <h1>Error</h1>
-      <p>${error.message}</p>
-      <a href="/">Back to main page</a>
-    `);
-  }
-});
-app.post('/test-order-customs/:orderNumber', async (req, res) => {
-  const OrderCustomsUpdater = require('./order-customs-updater');
-  const updater = new OrderCustomsUpdater();
-  const orderNumber = req.params.orderNumber;
-  
-  res.json({ message: `Testing customs update on order ${orderNumber}. Check logs for details.` });
-  
-  updater.updateSingleOrder(orderNumber).catch(console.error);
-});
 // Legacy test endpoint
 app.get('/test', async (req, res) => {
   const updater = new ShipStationCustomsUpdater();
@@ -280,5 +283,5 @@ app.post('/update', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(\`Server running on port \${PORT}\`);
 });
