@@ -176,7 +176,7 @@ class ShipStationCustomsUpdater {
   }
 
   async testFetchOnly() {
-    await this.findAndDeactivateDuplicates(true); // Test mode
+    await this.findAndDeactivateDuplicates(false); // Test mode
   }
 }
 
