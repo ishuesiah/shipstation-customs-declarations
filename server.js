@@ -1,5 +1,6 @@
 const express = require('express');
 const multer = require('multer');
+const ShipStationProductSync = require('./shipstation-product-sync');
 const ShipStationCustomsUpdater = require('./update-customs');
 const ShopifyCustomsUpdater = require('./shopify-customs-updater');
 const ShopifyRulesUpdater = require('./shopify-rules-updater');
@@ -163,6 +164,49 @@ app.post('/apply-shopify-rules', async (req, res) => {
   res.json({ message: 'Applying rules to all Shopify products. Check logs for progress.' });
   
   updater.applyRules().catch(console.error);
+});
+
+//endpoint for sync
+app.post('/sync-shipstation-products', requireAuth, upload.single('csv'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).send('<h1>Error</h1><p>Please upload a CSV file</p>');
+  }
+
+  try {
+    const csvData = req.file.buffer.toString('utf-8');
+    const syncer = new ShipStationProductSync(csvData);
+    
+    // Get options from form
+    const options = {
+      updateExisting: req.body.updateExisting !== 'false',
+      createNew: req.body.createNew === 'true'
+    };
+    
+    const results = await syncer.syncProducts(options);
+    
+    res.send(`
+      <h1>ShipStation Product Sync Complete</h1>
+      <p>✅ Updated: ${results.updated} products</p>
+      <p>✨ Created: ${results.created} new products</p>
+      <p>⏭️ Skipped (no changes): ${results.skipped} products</p>
+      <p>❌ Errors: ${results.errors.length}</p>
+      ${results.errors.length > 0 ? `
+        <h3>Errors:</h3>
+        <ul>
+          ${results.errors.map(e => `<li>${e.sku} (${e.action}): ${JSON.stringify(e.error)}</li>`).join('')}
+        </ul>
+      ` : ''}
+      <br>
+      <a href="/">Back to main page</a>
+    `);
+  } catch (error) {
+    console.error('Product sync error:', error);
+    res.status(500).send(`
+      <h1>Error</h1>
+      <p>${error.message}</p>
+      <a href="/">Back to main page</a>
+    `);
+  }
 });
 
 // Legacy test endpoint
