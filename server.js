@@ -189,6 +189,15 @@ app.post('/apply-shopify-rules', async (req, res) => {
   
   updater.applyRules().catch(console.error);
 });
+//
+app.post('/auto-customs', async (req, res) => {
+  const CustomsRulesEngine = require('./customs-rules-engine');
+  const engine = new CustomsRulesEngine();
+  
+  res.json({ message: 'Intelligent customs update started. Check logs for details.' });
+  
+  engine.updateAllProducts().catch(console.error);
+});
 
 //endpoint for sync
 app.post('/sync-shipstation-products', upload.single('csv'), async (req, res) => {
