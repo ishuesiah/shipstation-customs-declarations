@@ -133,9 +133,25 @@ class ShipStationCustomsUpdater {
         for (const product of deactivationPlan) {
           try {
             // Update product to set active = false
-            await shipstation.put(`/products/${product.productId}`, {
-              active: false
-            });
+await shipstation.put(`/products/${product.productId}`, {
+  productId: product.productId,  // Must include the ID in the body
+  sku: product.sku,
+  name: product.name,
+  price: product.price,
+  defaultCost: product.defaultCost,
+  length: product.length,
+  width: product.width,
+  height: product.height,
+  weight: product.weight,
+  imageUrl: product.imageUrl,
+  thumbnailUrl: product.thumbnailUrl,
+  customsDescription: product.customsDescription,
+  customsValue: product.customsValue,
+  customsTariffNo: product.customsTariffNo,
+  customsCountryCode: product.customsCountryCode,
+  noCustoms: product.noCustoms,
+  active: false  // The only field we're actually changing
+});
             
             this.deactivated++;
             console.log(`✓ Deactivated: ${product.name} (ID: ${product.productId})`);
