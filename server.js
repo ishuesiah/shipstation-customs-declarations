@@ -257,7 +257,15 @@ app.post('/sync-shipstation-products', upload.single('csv'), async (req, res) =>
     `);
   }
 });
-
+app.post('/test-order-customs/:orderNumber', async (req, res) => {
+  const OrderCustomsUpdater = require('./order-customs-updater');
+  const updater = new OrderCustomsUpdater();
+  const orderNumber = req.params.orderNumber;
+  
+  res.json({ message: `Testing customs update on order ${orderNumber}. Check logs for details.` });
+  
+  updater.updateSingleOrder(orderNumber).catch(console.error);
+});
 // Legacy test endpoint
 app.get('/test', async (req, res) => {
   const updater = new ShipStationCustomsUpdater();
