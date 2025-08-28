@@ -34,11 +34,8 @@ app.get('/test', async (req, res) => {
   // Run async so we don't timeout the response
   updater.testFetchOnly().catch(console.error);
 });
-  // Run async so we don't timeout the response
-  updater.processAllOrders(true).catch(console.error);
-});
 
-// Production endpoint - updates all orders
+// Production endpoint - updates all orders (NOT IMPLEMENTED YET)
 app.post('/update', async (req, res) => {
   const { confirm } = req.body;
   
@@ -48,11 +45,7 @@ app.post('/update', async (req, res) => {
     });
   }
   
-  const updater = new ShipStationCustomsUpdater();
-  res.json({ message: 'Full update started. This will take a while. Check logs for progress.' });
-  
-  // Run async so we don't timeout the response
-  updater.processAllOrders(false).catch(console.error);
+  res.json({ message: 'Update functionality not implemented yet. Use /test first.' });
 });
 
 app.listen(PORT, () => {
