@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const ShipStationCustomsUpdater = require('./update-customs');
 const ShopifyCustomsUpdater = require('./shopify-customs-updater');
+const ShopifyRulesUpdater = require('./shopify-rules-updater');
 require('dotenv').config();
 
 const app = express();
@@ -64,6 +65,8 @@ app.get('/', (req, res) => {
           ✓ Matches by SKU+title for duplicate SKUs
         </div>
       </div>
+      <button class="shopify-btn" onclick="applyShopifyRules()">Apply HS/Weight Rules to All Shopify Products</button>
+
       
       <div id="result"></div>
       
@@ -87,7 +90,18 @@ app.get('/', (req, res) => {
               });
           }
         }
-        
+
+function applyShopifyRules() {
+  if (confirm('This will update all active Shopify products based on title rules. Continue?')) {
+    document.getElementById('result').innerHTML = 'Applying rules to all products... This may take 10-20 minutes.';
+    fetch('/apply-shopify-rules', { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById('result').innerHTML = data.message;
+      });
+  }
+}
+
         document.getElementById('csvForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           const file = document.getElementById('csvFile').files[0];
@@ -142,6 +156,13 @@ app.post('/update-shopify-customs', upload.single('csv'), async (req, res) => {
   res.json({ message: 'Processing CSV... Check logs for progress.' });
   
   updater.updateFromCSV(csvContent).catch(console.error);
+});
+//shopify rules updater
+app.post('/apply-shopify-rules', async (req, res) => {
+  const updater = new ShopifyRulesUpdater();
+  res.json({ message: 'Applying rules to all Shopify products. Check logs for progress.' });
+  
+  updater.applyRules().catch(console.error);
 });
 
 // Legacy test endpoint
