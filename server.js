@@ -191,7 +191,7 @@ app.post('/apply-shopify-rules', async (req, res) => {
 });
 
 //endpoint for sync
-app.post('/sync-shipstation-products', requireAuth, upload.single('csv'), async (req, res) => {
+app.post('/sync-shipstation-products', upload.single('csv'), async (req, res) => {
   if (!req.file) {
     return res.status(400).send('<h1>Error</h1><p>Please upload a CSV file</p>');
   }
