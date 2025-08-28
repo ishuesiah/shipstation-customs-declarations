@@ -26,11 +26,14 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date() });
 });
 
-// Test endpoint - updates only 5 orders
+// Test endpoint - just fetches and displays info
 app.get('/test', async (req, res) => {
   const updater = new ShipStationCustomsUpdater();
-  res.json({ message: 'Test update started. Check logs for progress.' });
+  res.json({ message: 'Test fetch started. Check logs for results.' });
   
+  // Run async so we don't timeout the response
+  updater.testFetchOnly().catch(console.error);
+});
   // Run async so we don't timeout the response
   updater.processAllOrders(true).catch(console.error);
 });
