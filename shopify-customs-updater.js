@@ -54,43 +54,80 @@ class ShopifyCustomsUpdater {
     };
   }
 
-  // Try to match a CSV record to a Shopify variant
-  findMatchingVariant(record, variantsBySku, productVariantMap) {
-    // First try: exact SKU match
-    const sku = record.sku?.trim().toUpperCase();
-    if (sku && variantsBySku[sku]) {
-      this.matchedBySku++;
-      return variantsBySku[sku];
-    }
-    
-    // Second try: match by title if provided
-    const fullTitle = record.title || record.product_title || record.name || '';
-    if (!fullTitle) return null;
-    
+ // Replace the findMatchingVariant method with this version:
+findMatchingVariant(record, variantsBySku, productVariantMap) {
+  const sku = record.sku?.trim().toUpperCase();
+  const fullTitle = record.title || record.product_title || record.name || '';
+  
+  // If we have both SKU and title, try to match BOTH
+  if (sku && fullTitle) {
+    // Parse the title
     const { product: csvProduct, variant: csvVariant } = this.parseTitle(fullTitle);
     
+    // Look for a variant that matches BOTH SKU and title
     for (const [productTitle, variants] of Object.entries(productVariantMap)) {
       if (this.titlesMatch(productTitle, csvProduct)) {
-        if (!csvVariant && variants.length === 1) {
-          this.matchedByTitle++;
-          return variants[0];
-        }
-        
         for (const variant of variants) {
-          if (this.titlesMatch(variant.title, csvVariant) || 
-              this.titlesMatch(variant.option1, csvVariant) ||
-              this.titlesMatch(variant.option2, csvVariant) ||
-              this.titlesMatch(variant.option3, csvVariant)) {
-            this.matchedByTitle++;
-            return variant;
+          // Check if SKU matches AND title/variant matches
+          if (variant.sku?.trim().toUpperCase() === sku) {
+            if (!csvVariant || 
+                this.titlesMatch(variant.title, csvVariant) ||
+                this.titlesMatch(variant.option1, csvVariant)) {
+              this.matchedBySku++;
+              console.log(`  → Matched by SKU+Title: ${variant.product_title} - ${variant.title}`);
+              return variant;
+            }
           }
         }
       }
     }
     
-    return null;
+    // If no exact match, warn about ambiguous SKU
+    console.log(`  ⚠️ SKU ${sku} with title "${fullTitle}" - no exact match, trying title only`);
+    
+    // Fall back to title-only matching
+    return this.findMatchingVariantByTitle(fullTitle, productVariantMap);
   }
+  
+  // If only SKU provided
+  if (sku && variantsBySku[sku]) {
+    this.matchedBySku++;
+    return variantsBySku[sku];
+  }
+  
+  // If only title provided
+  if (fullTitle) {
+    return this.findMatchingVariantByTitle(fullTitle, productVariantMap);
+  }
+  
+  return null;
+}
 
+// Add this helper method:
+findMatchingVariantByTitle(fullTitle, productVariantMap) {
+  const { product: csvProduct, variant: csvVariant } = this.parseTitle(fullTitle);
+  
+  for (const [productTitle, variants] of Object.entries(productVariantMap)) {
+    if (this.titlesMatch(productTitle, csvProduct)) {
+      if (!csvVariant && variants.length === 1) {
+        this.matchedByTitle++;
+        return variants[0];
+      }
+      
+      for (const variant of variants) {
+        if (this.titlesMatch(variant.title, csvVariant) || 
+            this.titlesMatch(variant.option1, csvVariant) ||
+            this.titlesMatch(variant.option2, csvVariant) ||
+            this.titlesMatch(variant.option3, csvVariant)) {
+          this.matchedByTitle++;
+          return variant;
+        }
+      }
+    }
+  }
+  
+  return null;
+}
   titlesMatch(title1, title2) {
     if (!title1 || !title2) return false;
     
