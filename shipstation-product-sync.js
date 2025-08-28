@@ -162,11 +162,15 @@ class ShipStationProductSync {
             
             if (Object.keys(updates).length > 0) {
               try {
-                // Include the productId AND sku in the update (SKU is required by ShipStation API)
-                updates.productId = existingProduct.productId;
-                updates.sku = existingProduct.sku; // SKU is required even when updating by productId
+                // Build the complete update object with required fields
+                const updatePayload = {
+                  productId: existingProduct.productId,
+                  sku: csvProduct.sku || existingProduct.sku,  // Required
+                  name: csvProduct.name || existingProduct.name, // Required
+                  ...updates  // Spread the actual updates
+                };
                 
-                await shipstationAPI.put(`/products/${existingProduct.productId}`, updates);
+                await shipstationAPI.put(`/products/${existingProduct.productId}`, updatePayload);
                 
                 this.updated++;
                 console.log(`✅ Updated: ${csvProduct.sku} - ${csvProduct.name || existingProduct.name}`);
