@@ -1,3 +1,4 @@
+// order-customs-updater.js
 const axios = require('axios');
 require('dotenv').config();
 
@@ -12,7 +13,8 @@ const shipstationAPI = axios.create({
   },
   headers: {
     'Content-Type': 'application/json'
-  }
+  },
+  timeout: 30000
 });
 
 class OrderCustomsUpdater {
@@ -20,359 +22,245 @@ class OrderCustomsUpdater {
     this.updated = 0;
     this.skipped = 0;
     this.errors = [];
-    
-    // Same rules as your product updater
+
+    // Your rules (kept as-is; normalized below)
     this.rules = [
-      {
-        keywords: ['insert', 'refill', 'loose', 'pages only'],
-        hsCode: '4820.90.0000',
-        description: 'Planner inserts (loose refills)',
-        country: 'CA'
-      },
-      {
-        keywords: ['2026 planner', '2025 planner', 'undated planner', 'daily planner', 'weekly planner', 'monthly planner'],
-        hsCode: '4820.10.2010',
-        description: 'Planner agenda (bound diary)',
-        country: 'CA'
-      },
-      {
-        keywords: ['b5 notebook', 'b5 journal', 'notebook b5', 'journal b5'],
-        hsCode: '4820.10.2030',
-        description: 'Notebook (sewn journal, B5 size)',
-        country: 'CA'
-      },
-      {
-        keywords: ['a5 notebook', 'tn notebook', 'travelers notebook', 'notebook a5', 'journal a5', 'dotted notebook', 'lined notebook', 'grid notebook', 'blank notebook'],
-        hsCode: '4820.10.2060',
-        description: 'Notebook (bound journal)',
-        country: 'CA'
-      },
-      {
-        keywords: ['notebook', 'journal'],
-        hsCode: '4820.10.2060',
-        description: 'Notebook (bound journal)',
-        country: 'CA'
-      },
-      {
-        keywords: ['notepad', 'note pad', 'memo pad', 'writing pad'],
-        hsCode: '4820.10.2020',
-        description: 'Notepad',
-        country: 'CA'
-      },
-      {
-        keywords: ['sticky note', 'sticky pad', 'post-it', 'adhesive note'],
-        hsCode: '4820.10.2020',
-        description: 'Sticky notepad',
-        country: 'USA'
-      },
-      {
-        keywords: ['sticker', 'decal', 'label'],
-        hsCode: '4911.99.8000',
-        description: 'Paper sticker',
-        country: 'CA'
-      },
-      {
-        keywords: ['pen', 'gel pen', 'ballpoint', 'rollerball', 'fountain pen'],
-        hsCode: '9608.10.0000',
-        description: 'Gel ink pen',
-        country: 'CA'
-      },
-      {
-        keywords: ['pen refill', 'ink refill', 'cartridge'],
-        hsCode: '9608.60.0000',
-        description: 'Refills for ballpoint pen',
-        country: 'JP'
-      },
-      {
-        keywords: ['bracelet'],
-        hsCode: '7113.11.5000',
-        description: 'Sterling silver jewellery bracelets',
-        country: 'CA'
-      },
-      {
-        keywords: ['earring'],
-        hsCode: '7113.11.5000',
-        description: 'Sterling silver jewellery earrings',
-        country: 'CA'
-      },
-      {
-        keywords: ['pendant', 'necklace'],
-        hsCode: '7113.11.5000',
-        description: 'Sterling silver jewellery pendants',
-        country: 'CA'
-      },
-      {
-        keywords: ['charm', 'dangle'],
-        hsCode: '7113.11.5000',
-        description: 'Sterling silver jewellery charms',
-        country: 'CA'
-      },
-      {
-        keywords: ['stud', 'post earring'],
-        hsCode: '7113.11.5000',
-        description: 'Sterling silver jewellery studs',
-        country: 'CA'
-      },
-      {
-        keywords: ['jewelry', 'jewellery', 'sterling', 'silver'],
-        hsCode: '7113.11.5000',
-        description: 'Sterling silver jewellery',
-        country: 'CA'
-      },
-      {
-        keywords: ['paper clip', 'paperclip', 'binder clip'],
-        hsCode: '8305.90.3010',
-        description: 'Office paper clips',
-        country: 'CN'
-      },
-      {
-        keywords: ['elastic band', 'elastic closure', 'notebook elastic', 'planner elastic'],
-        hsCode: '6307.90.9800',
-        description: 'Elastic for notebook',
-        country: 'CN'
-      },
-      {
-        keywords: ['planner charm', 'bookmark charm', 'ribbon charm'],
-        hsCode: '7117.90.9000',
-        description: 'Charm for notebook ribbon',
-        country: 'CN'
-      },
-      {
-        keywords: ['planner pocket', 'notebook pocket', 'folder insert', 'pocket insert'],
-        hsCode: '4811.41.2100',
-        description: 'Paper pocket for notebook',
-        country: 'CN'
-      },
-      {
-        keywords: ['washi', 'decorative tape', 'masking tape', 'craft tape'],
-        hsCode: '4811.41.2100',
-        description: 'Decorative tape for journaling',
-        country: 'JP'
-      }
+      { keywords: ['insert', 'refill', 'loose', 'pages only'], hsCode: '4820.90.0000', description: 'Planner inserts (loose refills)', country: 'CA' },
+      { keywords: ['2026 planner', '2025 planner', 'undated planner', 'daily planner', 'weekly planner', 'monthly planner'], hsCode: '4820.10.2010', description: 'Planner agenda (bound diary)', country: 'CA' },
+      { keywords: ['b5 notebook', 'b5 journal', 'notebook b5', 'journal b5'], hsCode: '4820.10.2030', description: 'Notebook (sewn journal, B5 size)', country: 'CA' },
+      { keywords: ['a5 notebook', 'tn notebook', 'travelers notebook', 'notebook a5', 'journal a5', 'dotted notebook', 'lined notebook', 'grid notebook', 'blank notebook'], hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
+      { keywords: ['notebook', 'journal'], hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
+      { keywords: ['notepad', 'note pad', 'memo pad', 'writing pad'], hsCode: '4820.10.2020', description: 'Notepad', country: 'CA' },
+      { keywords: ['sticky note', 'sticky pad', 'post-it', 'adhesive note'], hsCode: '4820.10.2020', description: 'Sticky notepad', country: 'USA' },
+      { keywords: ['sticker', 'decal', 'label'], hsCode: '4911.99.8000', description: 'Paper sticker', country: 'CA' },
+      { keywords: ['pen', 'gel pen', 'ballpoint', 'rollerball', 'fountain pen'], hsCode: '9608.10.0000', description: 'Gel ink pen', country: 'CA' },
+      { keywords: ['pen refill', 'ink refill', 'cartridge'], hsCode: '9608.60.0000', description: 'Refills for ballpoint pen', country: 'JP' },
+      { keywords: ['bracelet'], hsCode: '7113.11.5000', description: 'Sterling silver jewellery bracelets', country: 'CA' },
+      { keywords: ['earring'], hsCode: '7113.11.5000', description: 'Sterling silver jewellery earrings', country: 'CA' },
+      { keywords: ['pendant', 'necklace'], hsCode: '7113.11.5000', description: 'Sterling silver jewellery pendants', country: 'CA' },
+      { keywords: ['charm', 'dangle'], hsCode: '7113.11.5000', description: 'Sterling silver jewellery charms', country: 'CA' },
+      { keywords: ['stud', 'post earring'], hsCode: '7113.11.5000', description: 'Sterling silver jewellery studs', country: 'CA' },
+      { keywords: ['jewelry', 'jewellery', 'sterling', 'silver'], hsCode: '7113.11.5000', description: 'Sterling silver jewellery', country: 'CA' },
+      { keywords: ['paper clip', 'paperclip', 'binder clip'], hsCode: '8305.90.3010', description: 'Office paper clips', country: 'CN' },
+      { keywords: ['elastic band', 'elastic closure', 'notebook elastic', 'planner elastic'], hsCode: '6307.90.9800', description: 'Elastic for notebook', country: 'CN' },
+      { keywords: ['planner charm', 'bookmark charm', 'ribbon charm'], hsCode: '7117.90.9000', description: 'Charm for notebook ribbon', country: 'CN' },
+      { keywords: ['planner pocket', 'notebook pocket', 'folder insert', 'pocket insert'], hsCode: '4811.41.2100', description: 'Paper pocket for notebook', country: 'CN' },
+      { keywords: ['washi', 'decorative tape', 'masking tape', 'craft tape'], hsCode: '4811.41.2100', description: 'Decorative tape for journaling', country: 'JP' }
     ];
   }
-  
+
+  // Map name -> customs fields (for customsItems later)
   getCustomsData(productName) {
     if (!productName) return null;
-    
     const nameLower = productName.toLowerCase();
-    
+
     for (const rule of this.rules) {
       for (const keyword of rule.keywords) {
         if (nameLower.includes(keyword)) {
           return {
-            customsTariffNumber: rule.hsCode,
-            customsDescription: rule.description,
-            customsCountry: rule.country
+            harmonizedTariffCode: rule.hsCode,
+            description: rule.description,
+            countryOfOrigin: rule.country
           };
         }
       }
     }
-    
     return null;
   }
-  
+
+  // Build customsItems by merging existing items and new matches.
+  buildCustomsItems(order) {
+    const existing = (order.internationalOptions && order.internationalOptions.customsItems) || [];
+    const bySkuExisting = new Map();
+    for (const ci of existing) {
+      if (ci.sku) bySkuExisting.set(ci.sku, ci);
+    }
+
+    const customsItems = [];
+
+    for (const item of order.items) {
+      const match = this.getCustomsData(item.name);
+      if (match) {
+        customsItems.push({
+          // keep existing customsItemId if present for this SKU
+          ...(bySkuExisting.get(item.sku) && bySkuExisting.get(item.sku).customsItemId
+            ? { customsItemId: bySkuExisting.get(item.sku).customsItemId }
+            : {}),
+          sku: item.sku || undefined,
+          description: match.description,
+          quantity: item.quantity || 1,
+          // value is total value for this customs line (qty * unitPrice)
+          value: Number(((item.unitPrice || 0) * (item.quantity || 1)).toFixed(2)),
+          harmonizedTariffCode: match.harmonizedTariffCode,
+          countryOfOrigin: match.countryOfOrigin
+          // weight optional; omit unless you want to supply it explicitly
+        });
+      } else {
+        // If we didn’t match a rule but there’s an existing customs line for the SKU, keep it.
+        if (bySkuExisting.has(item.sku)) {
+          customsItems.push(bySkuExisting.get(item.sku));
+        }
+      }
+    }
+
+    return customsItems;
+  }
+
+  // Minimal safe order payload for upsert
+  makeUpsertPayload(order, customsItems) {
+    return {
+      // include orderId to update, not create
+      orderId: order.orderId,
+      orderNumber: order.orderNumber,
+      orderDate: order.orderDate,
+      orderStatus: order.orderStatus, // must remain awaiting_shipment to be editable
+      customerUsername: order.customerUsername,
+      customerEmail: order.customerEmail,
+      billTo: order.billTo,
+      shipTo: order.shipTo,
+      amountPaid: order.amountPaid,
+      taxAmount: order.taxAmount,
+      shippingAmount: order.shippingAmount,
+      orderTotal: order.orderTotal,
+      items: order.items.map(it => ({
+        orderItemId: it.orderItemId,
+        lineItemKey: it.lineItemKey,
+        sku: it.sku,
+        name: it.name,
+        imageUrl: it.imageUrl,
+        weight: it.weight,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        options: it.options,
+        productId: it.productId,
+        fulfillmentSku: it.fulfillmentSku,
+        adjustment: it.adjustment,
+        upc: it.upc,
+        taxAmount: it.taxAmount
+      })),
+      advancedOptions: order.advancedOptions,
+      tagIds: order.tagIds,
+      internationalOptions: customsItems.length
+        ? { contents: 'merchandise', customsItems }
+        : order.internationalOptions // leave as-is if nothing to change
+    };
+  }
+
   async updateSingleOrder(orderNumber) {
     console.log('========================================');
     console.log(`TESTING CUSTOMS UPDATE ON ORDER ${orderNumber}`);
     console.log('========================================\n');
-    
+
     try {
-      // Fetch the specific order
       console.log(`Fetching order ${orderNumber}...`);
-      const response = await shipstationAPI.get('/orders', {
-        params: {
-          orderNumber: orderNumber
-        }
-      });
-      
-      if (!response.data.orders || response.data.orders.length === 0) {
-        console.log(`❌ Order ${orderNumber} not found`);
+      const resp = await shipstationAPI.get('/orders', { params: { orderNumber } });
+
+      if (!resp.data.orders || resp.data.orders.length === 0) {
+        console.log(`✗ Order ${orderNumber} not found`);
         return;
       }
-      
-      const order = response.data.orders[0];
-      console.log(`Found order: ${order.orderNumber}`);
-      console.log(`Ship to: ${order.shipTo.country}`);
-      console.log(`Status: ${order.orderStatus}\n`);
-      
-      console.log('Current line items:');
-      order.items.forEach(item => {
-        console.log(`  - ${item.name}`);
-        console.log(`    SKU: ${item.sku}`);
-        console.log(`    Current HS: ${item.customsTariffNumber || 'MISSING'}`);
-        console.log(`    Current Desc: ${item.customsDescription || 'MISSING'}`);
-      });
-      
-      const updatedItems = [];
-      
-      console.log('\n🔍 Analyzing items for customs data...\n');
-      
+
+      const order = resp.data.orders[0];
+
+      if (order.orderStatus !== 'awaiting_shipment') {
+        console.log(`✗ Order ${orderNumber} is not editable (status: ${order.orderStatus})`);
+        return;
+      }
+
+      console.log(`Found order: ${order.orderNumber} → shipTo.country=${order.shipTo?.country}`);
+      console.log('Current items:');
       for (const item of order.items) {
-        const customsData = this.getCustomsData(item.name);
-        
-        if (customsData) {
-          console.log(`✓ Found match for "${item.name}":`);
-          console.log(`  New HS: ${customsData.customsTariffNumber}`);
-          console.log(`  New Desc: ${customsData.customsDescription}`);
-          console.log(`  Country: ${customsData.customsCountry}`);
-          
-          updatedItems.push({
-            orderItemId: item.orderItemId,
-            ...customsData
-          });
-        } else {
-          console.log(`✗ No rule matched for "${item.name}"`);
-        }
+        console.log(`  - ${item.name} (SKU: ${item.sku})`);
       }
-      
-      if (updatedItems.length > 0) {
-        console.log(`\n📝 Ready to update ${updatedItems.length} items. Proceeding...`);
-        
-        const updatePayload = {
-          orderId: order.orderId,
-          items: updatedItems
-        };
-        
-        await shipstationAPI.put(`/orders/${order.orderId}`, updatePayload);
-        console.log(`\n✅ Successfully updated order ${orderNumber}!`);
-      } else {
-        console.log('\n⏭️ No items need updating.');
+
+      const customsItems = this.buildCustomsItems(order);
+      if (!customsItems.length) {
+        console.log('⏭️ No customs changes to apply.');
+        return;
       }
-      
+
+      console.log(`Applying ${customsItems.length} customs line(s)...`);
+      const payload = this.makeUpsertPayload(order, customsItems);
+
+      await shipstationAPI.post('/orders/createorder', payload);
+      console.log(`✓ Upserted order ${orderNumber} with customs data.`);
+
     } catch (error) {
       console.error('Error:', error.response?.data || error.message);
     }
   }
-  
+
   async updateOrders(options = {}) {
-    const { 
-      countryCode = 'US',  // Target USA orders by default
-      orderStatus = 'awaiting_shipment',  // Only unshipped orders
-      startDate = null,  // Optional date filter
+    const {
+      countryCode = 'US',
+      orderStatus = 'awaiting_shipment',
+      startDate = null,
       endDate = null
     } = options;
-    
+
     console.log('========================================');
-    console.log('UPDATING ORDER CUSTOMS DATA');
+    console.log('UPDATING ORDER CUSTOMS DATA (BULK)');
     console.log('========================================\n');
     console.log(`Target country: ${countryCode}`);
     console.log(`Order status: ${orderStatus}\n`);
-    
+
     try {
       let page = 1;
       const pageSize = 100;
-      let hasMore = true;
       let totalOrders = 0;
-      
-      while (hasMore) {
-        // Build query parameters
-        const params = {
-          page,
-          pageSize,
-          orderStatus
-        };
-        
+
+      // Paged fetch
+      while (true) {
+        const params = { page, pageSize, orderStatus };
         if (startDate) params.createDateStart = startDate;
         if (endDate) params.createDateEnd = endDate;
-        
+
         console.log(`Fetching page ${page}...`);
-        const response = await shipstationAPI.get('/orders', { params });
-        const orders = response.data.orders;
-        
-        if (orders.length === 0) {
-          hasMore = false;
-          continue;
-        }
-        
+        const resp = await shipstationAPI.get('/orders', { params });
+        const orders = resp.data.orders || [];
+
+        if (orders.length === 0) break;
         totalOrders += orders.length;
-        
-        // Process each order
+
         for (const order of orders) {
-          // Skip if not target country
-          if (order.shipTo.country !== countryCode) {
-            continue;
+          if (order.shipTo?.country !== countryCode) { this.skipped++; continue; }
+          if (order.orderStatus !== 'awaiting_shipment') { this.skipped++; continue; }
+
+          const customsItems = this.buildCustomsItems(order);
+          if (!customsItems.length) { this.skipped++; continue; }
+
+          try {
+            const payload = this.makeUpsertPayload(order, customsItems);
+            await shipstationAPI.post('/orders/createorder', payload);
+            this.updated++;
+            console.log(`✓ Updated ${order.orderNumber} (${customsItems.length} customs line(s))`);
+          } catch (e) {
+            const err = e.response?.data || e.message;
+            this.errors.push({ order: order.orderNumber, error: err });
+            console.error(`✗ Failed ${order.orderNumber}:`, err);
           }
-          
-          let orderNeedsUpdate = false;
-          const updatedItems = [];
-          
-          // Check each line item
-          for (const item of order.items) {
-            // Skip if already has customs data
-            if (item.customsTariffNumber && item.customsDescription) {
-              continue;
-            }
-            
-            // Get customs data based on item name
-            const customsData = this.getCustomsData(item.name);
-            
-            if (customsData) {
-              // Prepare the update for this item
-              updatedItems.push({
-                orderItemId: item.orderItemId,
-                ...customsData
-              });
-              orderNeedsUpdate = true;
-            } else {
-              console.log(`  ⚠️ No rule matched: ${item.name}`);
-            }
-          }
-          
-          // Update the order if needed
-          if (orderNeedsUpdate && updatedItems.length > 0) {
-            try {
-              // Update the order with new customs data
-              const updatePayload = {
-                orderId: order.orderId,
-                items: updatedItems
-              };
-              
-              await shipstationAPI.put(`/orders/${order.orderId}`, updatePayload);
-              
-              this.updated++;
-              console.log(`✅ Updated order ${order.orderNumber} (${updatedItems.length} items)`);
-              
-              // Rate limiting
-              await new Promise(resolve => setTimeout(resolve, 550));
-              
-            } catch (error) {
-              this.errors.push({
-                order: order.orderNumber,
-                error: error.response?.data || error.message
-              });
-              console.error(`❌ Failed to update order ${order.orderNumber}:`, error.message);
-            }
-          } else {
-            this.skipped++;
-          }
+
+          // simple rate limit
+          await new Promise(r => setTimeout(r, 600));
         }
-        
+
         page++;
-        
-        // Rate limiting between pages
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(r => setTimeout(r, 1000));
       }
-      
-      // Summary
+
       console.log('\n========================================');
       console.log('ORDER CUSTOMS UPDATE COMPLETE');
       console.log('========================================');
-      console.log(`📊 Total orders processed: ${totalOrders}`);
-      console.log(`✅ Updated: ${this.updated} orders`);
-      console.log(`⏭️ Skipped: ${this.skipped} orders`);
-      console.log(`❌ Errors: ${this.errors.length}`);
-      
-      if (this.errors.length > 0) {
-        console.log('\nFailed orders:');
-        this.errors.forEach(err => {
-          console.log(`- Order ${err.order}: ${err.error}`);
-        });
+      console.log(`Total orders processed: ${totalOrders}`);
+      console.log(`Updated: ${this.updated}`);
+      console.log(`Skipped: ${this.skipped}`);
+      console.log(`Errors: ${this.errors.length}`);
+      if (this.errors.length) {
+        for (const e of this.errors) console.log(`- ${e.order}: ${JSON.stringify(e.error)}`);
       }
-      
-    } catch (error) {
-      console.error('Fatal error:', error);
-      throw error;
+    } catch (fatal) {
+      console.error('Fatal error:', fatal);
+      throw fatal;
     }
   }
 }
