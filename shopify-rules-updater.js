@@ -23,7 +23,12 @@ class ShopifyRulesUpdater {
   getHSCodeAndCountry(productTitle) {
     const title = productTitle.toLowerCase();
     
-    // Order matters - check more specific rules first
+    // Check inserts FIRST (before notebook, since inserts can have A5 in variant)
+    if (title.includes('insert')) {  // This catches both "insert" and "inserts"
+      return { hsCode: '4820.90.0000', country: 'CA' };
+    }
+    
+    // Then check other specific rules
     if (title.includes('washi')) {
       return { hsCode: '4811.41.2100', country: 'JP' };
     }
@@ -54,9 +59,6 @@ class ShopifyRulesUpdater {
     if (title.includes('brass') || title.includes('pen')) {
       return { hsCode: '9608.10.0000', country: 'CA' };
     }
-    if (title.includes('inserts')) {
-      return { hsCode: '4820.90.0000', country: 'CA' };
-    }
     if (title.includes('planner')) {
       return { hsCode: '4820.10.2010', country: 'CA' };
     }
@@ -68,27 +70,47 @@ class ShopifyRulesUpdater {
     return null;
   }
 
-  getNotebookHSCode(productTitle, variantTitle) {
+  getSpecialHSCode(productTitle, variant) {
     const title = productTitle.toLowerCase();
-    const variant = variantTitle ? variantTitle.toLowerCase() : '';
     
-    if (!title.includes('notebook')) return null;
-    
-    // Check variant for size
-    if (variant.includes('b5')) {
-      return '4820.10.2030';
+    // IMPORTANT: Check for inserts first - they override notebook logic
+    if (title.includes('insert')) {
+      return '4820.90.0000';  // All inserts get this code regardless of variant
     }
-    if (variant.includes('a5') || variant.includes('tn')) {
+    
+    // Only apply notebook variant logic if it's actually a notebook
+    if (title.includes('notebook')) {
+      // Combine all variant options into one string to check
+      const variantText = [
+        variant.option1 || '',
+        variant.option2 || '',
+        variant.option3 || ''
+      ].join(' ').toLowerCase();
+      
+      // Check for size in variant options
+      if (variantText.includes('b5')) {
+        return '4820.10.2030';
+      }
+      if (variantText.includes('a5') || variantText.includes('tn')) {
+        return '4820.10.2060';
+      }
+      
+      // Default notebook code
       return '4820.10.2060';
     }
     
-    // Default notebook code
-    return '4820.10.2060';
+    return null;
   }
 
-  getWeight(productTitle, variantTitle) {
+  getWeight(productTitle, variant) {
     const title = productTitle.toLowerCase();
-    const variant = variantTitle ? variantTitle.toLowerCase() : '';
+    
+    // Combine variant options for checking
+    const variantText = [
+      variant.option1 || '',
+      variant.option2 || '',
+      variant.option3 || ''
+    ].join(' ').toLowerCase();
     
     // Simple products first
     if (title.includes('washi')) return 15;
@@ -117,20 +139,20 @@ class ShopifyRulesUpdater {
     if (title.includes('notebook')) {
       // Cloth flex notebooks
       if (title.includes('cloth flex') && !title.includes('hardcover') && !title.includes('paper flex')) {
-        if (variant.includes('a5')) return 394;
+        if (variantText.includes('a5')) return 394;
       }
       
       // Paper flex notebooks
       if (title.includes('paper flex') && !title.includes('hardcover') && !title.includes('cloth flex')) {
-        if (variant.includes('a5')) return 404;
+        if (variantText.includes('a5')) return 404;
       }
       
       // Regular notebooks (exclude 70gsm and flex variants)
       if (!title.includes('70gsm') && !title.includes('70 gsm') && 
           !title.includes('cloth flex') && !title.includes('paper flex')) {
-        if (variant.includes('tn')) return 372;
-        if (variant.includes('a5')) return 498;
-        if (variant.includes('b5')) return 706;
+        if (variantText.includes('tn')) return 372;
+        if (variantText.includes('a5')) return 498;
+        if (variantText.includes('b5')) return 706;
       }
     }
     
@@ -161,39 +183,44 @@ class ShopifyRulesUpdater {
           
           processedCount++;
           
-          // Get HS code and country for this product
+          // Get base HS code and country for this product
           const productRules = this.getHSCodeAndCountry(product.title);
           
           for (const variant of product.variants) {
             const updateData = { id: variant.id };
             let fieldsToUpdate = [];
             
-            // Determine HS code (special case for notebooks)
+            // Determine HS code - check for special cases (notebooks with variants, inserts)
             let hsCode = null;
-            if (product.title.toLowerCase().includes('notebook')) {
-              hsCode = this.getNotebookHSCode(product.title, variant.title);
-            } else if (productRules) {
+            if (product.title.toLowerCase().includes('notebook') || 
+                product.title.toLowerCase().includes('insert')) {
+              // Use special logic for notebooks and inserts
+              hsCode = this.getSpecialHSCode(product.title, variant);
+            } 
+            
+            // If no special case applied, use the general rules
+            if (!hsCode && productRules) {
               hsCode = productRules.hsCode;
             }
             
             // Update HS code if different
             if (hsCode && hsCode !== variant.harmonized_system_code) {
               updateData.harmonized_system_code = hsCode;
-              fieldsToUpdate.push('hs_code');
+              fieldsToUpdate.push(`hs_code: ${hsCode}`);
             }
             
             // Update country if different
             if (productRules && productRules.country !== variant.country_code_of_origin) {
               updateData.country_code_of_origin = productRules.country;
-              fieldsToUpdate.push('country');
+              fieldsToUpdate.push(`country: ${productRules.country}`);
             }
             
             // Calculate weight
-            const weight = this.getWeight(product.title, variant.title);
+            const weight = this.getWeight(product.title, variant);
             if (weight && weight !== variant.weight) {
               updateData.weight = weight;
               updateData.weight_unit = 'g';
-              fieldsToUpdate.push('weight');
+              fieldsToUpdate.push(`weight: ${weight}g`);
             }
             
             // Skip if nothing to update
@@ -208,13 +235,16 @@ class ShopifyRulesUpdater {
               });
               
               this.updated++;
-              console.log(`✅ Updated [${fieldsToUpdate.join(', ')}]: ${product.title} - ${variant.title}`);
+              const variantName = [variant.option1, variant.option2, variant.option3]
+                .filter(Boolean)
+                .join(' / ');
+              console.log(`✅ Updated [${fieldsToUpdate.join(', ')}]: ${product.title} - ${variantName}`);
               
               await new Promise(resolve => setTimeout(resolve, 550));
               
             } catch (error) {
               this.errors.push({
-                product: `${product.title} - ${variant.title}`,
+                product: `${product.title} - ${[variant.option1, variant.option2, variant.option3].filter(Boolean).join(' / ')}`,
                 error: error.response?.data || error.message
               });
               console.error(`❌ Failed: ${product.title} - ${error.response?.data?.errors || error.message}`);
