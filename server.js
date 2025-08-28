@@ -1,6 +1,5 @@
 const express = require('express');
 const multer = require('multer');
-const ShipStationProductSync = require('./shipstation-product-sync');
 const ShipStationCustomsUpdater = require('./update-customs');
 const ShopifyCustomsUpdater = require('./shopify-customs-updater');
 const ShopifyRulesUpdater = require('./shopify-rules-updater');
