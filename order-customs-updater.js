@@ -13,20 +13,28 @@ const shipstationAPI = axios.create({
 });
 
 /**
+ * Toggle: append "SKU XYZ" to the customs description text so it’s visible
+ * on the declarations, even though the UI’s dedicated SKU field is not settable
+ * via API. This does NOT change your order items’ SKUs.
+ */
+const APPEND_SKU_TO_DESC = true;
+
+/**
  * CATEGORY DICTIONARY (canonical -> customs fields)
+ * – Edit here if you want to change the mapping.
  */
 const CATEGORY_TO_CUSTOMS = {
-  planners: { hsCode: '4820.10.2010', description: 'Planner agenda (bound diary)', country: 'CA' },
-  a5_notebooks: { hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
-  b5_notebooks: { hsCode: '4820.10.2030', description: 'Notebook (sewn journal, B5 size)', country: 'CA' },
-  tn_notebooks: { hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
+  planners:        { hsCode: '4820.10.2010', description: 'Planner agenda (bound diary)', country: 'CA' },
+  a5_notebooks:    { hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
+  b5_notebooks:    { hsCode: '4820.10.2030', description: 'Notebook (sewn journal, B5 size)', country: 'CA' },
+  tn_notebooks:    { hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
   planner_inserts: { hsCode: '4820.90.0000', description: 'Planner inserts (loose refills)', country: 'CA' },
-  stickers: { hsCode: '4911.99.8000', description: 'Paper sticker', country: 'CA' },
-  washi_tape: { hsCode: '4811.41.2100', description: 'Decorative paper tape for journaling', country: 'JP' },
-  planner_charms: { hsCode: '7117.90.9000', description: 'Imitation jewelry charm', country: 'CN' },
+  stickers:        { hsCode: '4911.99.8000', description: 'Paper sticker', country: 'CA' },
+  washi_tape:      { hsCode: '4811.41.2100', description: 'Decorative paper tape for journaling', country: 'JP' },
+  planner_charms:  { hsCode: '7117.90.9000', description: 'Imitation jewelry charm', country: 'CN' },
   planner_elastic: { hsCode: '6307.90.9800', description: 'Elastic for notebook', country: 'CN' },
-  notepad: { hsCode: '4820.10.2020', description: 'Notepad', country: 'CA' },
-  sticky_notepad: { hsCode: '4820.10.2020', description: 'Sticky notepad', country: 'USA' }
+  notepad:         { hsCode: '4820.10.2020', description: 'Notepad', country: 'CA' },
+  sticky_notepad:  { hsCode: '4820.10.2020', description: 'Sticky notepad', country: 'USA' }
 };
 
 /**
@@ -66,15 +74,15 @@ const NAME_PATTERNS = {
     /\b(daily|weekly|monthly)\b.*\bplanner(s)?\b/i,
     /\bplanner(s)?\b/i
   ],
-  a5_notebooks: [ /\ba5\b.*\b(notebook|journal)\b/i, /\b(notebook|journal)\b.*\ba5\b/i ],
-  b5_notebooks: [ /\bb5\b.*\b(notebook|journal)\b/i, /\b(notebook|journal)\b.*\bb5\b/i ],
-  tn_notebooks: [ /\btn\b.*\b(notebook|journal)\b/i, /\btravell?er'?s?\b.*\b(notebook|journal)\b/i ],
-  planner_inserts: [ /\b(insert|inserts|refill|refills|loose|looseleaf)\b/i, /\bdisc\s*bound\b|\bdiscbound\b/i ],
-  stickers: [ /\b(sticker|stickers)\b/i, /\b(tab|tabs)\b/i, /\bhighlight(s)?\b/i ],
-  washi_tape: [ /\bwashi\b/i, /\bmt\b/i ],
+  a5_notebooks:   [ /\ba5\b.*\b(notebook|journal)\b/i, /\b(notebook|journal)\b.*\ba5\b/i ],
+  b5_notebooks:   [ /\bb5\b.*\b(notebook|journal)\b/i, /\b(notebook|journal)\b.*\bb5\b/i ],
+  tn_notebooks:   [ /\btn\b.*\b(notebook|journal)\b/i, /\btravell?er'?s?\b.*\b(notebook|journal)\b/i ],
+  planner_inserts:[ /\b(insert|inserts|refill|refills|loose|looseleaf)\b/i, /\bdisc\s*bound\b|\bdiscbound\b/i ],
+  stickers:       [ /\b(sticker|stickers)\b/i, /\b(tab|tabs)\b/i, /\bhighlight(s)?\b/i ],
+  washi_tape:     [ /\bwashi\b/i, /\bmt\b/i ],
   planner_charms: [ /\bcharm(s)?\b/i ],
-  planner_elastic: [ /\belastic\b/i, /\bclip\s*band\b/i ],
-  notepad: [ /\bnotepad\b/i, /\bmemo\s*pad\b/i ],
+  planner_elastic:[ /\belastic\b/i, /\bclip\s*band\b/i ],
+  notepad:        [ /\bnotepad\b/i, /\bmemo\s*pad\b/i ],
   sticky_notepad: [ /\bsticky\s*note(s)?\b/i, /\bpost-?it\b/i, /\bstickies\b/i ]
 };
 
@@ -155,19 +163,37 @@ class OrderCustomsUpdater {
     return this.getCustomsByCategory(category) || this.getCustomsByName(name) || null;
   }
 
+  /** Format description, optionally appending the SKU text for human visibility. */
+  formatDesc(base, sku) {
+    if (!APPEND_SKU_TO_DESC || !sku) return base;
+    // keep it readable; many carriers tolerate ~50–100 chars, tune if you need to
+    const out = `${base} — SKU ${sku}`;
+    return out.length > 100 ? out.slice(0, 100) : out;
+  }
+
+  /**
+   * Find the best existing customs line to update (we prefer updating in place
+   * to avoid duplicate lines).
+   */
   findExistingLineIndex({ item, targetDesc, existing, usedIndices }) {
+    // 1) Try match by SKU in description (some UIs carry it there)
     if (item.sku) {
-      const idx1 = existing.findIndex(
-        (ci, i) => !usedIndices.has(i) && ci.sku && this.normalize(ci.sku) === this.normalize(item.sku)
+      const skuNorm = this.normalize(item.sku);
+      const idxSkuInDesc = existing.findIndex(
+        (ci, i) => !usedIndices.has(i) && this.normalize(ci.description || '').includes(skuNorm)
       );
-      if (idx1 >= 0) return idx1;
+      if (idxSkuInDesc >= 0) return idxSkuInDesc;
     }
+
+    // 2) Exact description match to target description
     if (targetDesc) {
       const idx2 = existing.findIndex(
         (ci, i) => !usedIndices.has(i) && this.normalize(ci.description) === this.normalize(targetDesc)
       );
       if (idx2 >= 0) return idx2;
     }
+
+    // 3) Best token overlap with the item name
     let bestIdx = -1;
     let bestScore = 0;
     for (let i = 0; i < existing.length; i++) {
@@ -176,13 +202,21 @@ class OrderCustomsUpdater {
       if (s > bestScore) { bestScore = s; bestIdx = i; }
     }
     if (bestScore >= 0.34) return bestIdx;
+
     return -1;
   }
 
+  /**
+   * Merge customs items:
+   *  - Start with ALL existing lines (so nothing is deleted)
+   *  - Update best matches in place; else append new lines
+   *  - We do NOT try to set a 'sku' on customs lines (the model doesn’t support it).
+   */
   mergeCustomsItems(order) {
     const existing = Array.isArray(order.internationalOptions?.customsItems)
       ? order.internationalOptions.customsItems.map(ci => ({ ...ci }))
       : [];
+
     const used = new Set();
     const merged = existing.map(ci => ({ ...ci }));
 
@@ -190,12 +224,12 @@ class OrderCustomsUpdater {
       const match = this.getCustomsData({ name: item.name, category: item.category });
       if (!match) continue;
 
-      const targetDesc = match.description;
+      const targetDesc = this.formatDesc(match.description, item.sku);
       const idx = this.findExistingLineIndex({ item, targetDesc, existing: merged, usedIndices: used });
 
+      // Note: customs item model supports only these fields (no 'sku').
       const newLine = {
         ...(idx >= 0 && merged[idx].customsItemId ? { customsItemId: merged[idx].customsItemId } : {}),
-        sku: item.sku || (idx >= 0 ? merged[idx].sku : undefined),
         description: targetDesc,
         quantity: idx >= 0 ? (merged[idx].quantity || item.quantity || 1) : (item.quantity || 1),
         value: Number(((item.unitPrice || merged[idx]?.value || 0) * (item.quantity || 1)).toFixed(2)),
@@ -207,11 +241,11 @@ class OrderCustomsUpdater {
         merged[idx] = newLine;
         used.add(idx);
       } else {
+        // avoid pushing an exact duplicate
         const dup = merged.findIndex(ci =>
           this.normalize(ci.description) === this.normalize(newLine.description) &&
           (ci.harmonizedTariffCode || '') === (newLine.harmonizedTariffCode || '') &&
           (ci.countryOfOrigin || '') === (newLine.countryOfOrigin || '') &&
-          (this.normalize(ci.sku || '') === this.normalize(newLine.sku || '')) &&
           Number(ci.value || 0) === Number(newLine.value || 0) &&
           Number(ci.quantity || 0) === Number(newLine.quantity || 0)
         );
@@ -219,35 +253,36 @@ class OrderCustomsUpdater {
       }
     }
 
+    // Safety: never reduce customs lines
     if (merged.length < existing.length) {
       throw new Error(`Safety check: customs lines would decrease (${merged.length} < ${existing.length}). Aborting.`);
     }
     return merged;
   }
 
-  // --- NEW: Build items array that *preserves SKUs* and avoids fields that can cause remaps
+  /**
+   * Build the items array in a way that *preserves SKUs* and avoids fields
+   * that can cause ShipStation to remap products on us.
+   */
   buildSafeItems(order) {
-    // Preserve exactly the SKU value ShipStation gave us for each item
-    const safe = order.items.map(it => {
-      const item = {
-        orderItemId: it.orderItemId,
-        lineItemKey: it.lineItemKey,
-        sku: typeof it.sku === 'string' ? it.sku : (it.sku ?? ''),
-        name: it.name,
-        quantity: it.quantity,
-        unitPrice: it.unitPrice,
-        weight: it.weight,
-        taxAmount: it.taxAmount
-      };
-      // Do NOT include fulfillmentSku, options, upc, productId, adjustment — less chance of unintended side-effects.
-      return item;
-    });
+    const safe = order.items.map(it => ({
+      orderItemId: it.orderItemId,
+      lineItemKey: it.lineItemKey,
+      sku: typeof it.sku === 'string' ? it.sku : (it.sku ?? ''), // keep exactly what ShipStation returned
+      name: it.name,
+      quantity: it.quantity,
+      unitPrice: it.unitPrice,
+      weight: it.weight,
+      taxAmount: it.taxAmount
+      // intentionally omit: fulfillmentSku, options, upc, productId, adjustment, imageUrl
+    }));
 
-    // Guard: if any item had a non-empty SKU originally but would become empty, abort.
-    const skuLoss = order.items.some((it, idx) => (it.sku && typeof it.sku === 'string' && it.sku.trim().length > 0) && (!safe[idx].sku || safe[idx].sku.trim().length === 0));
-    if (skuLoss) {
-      throw new Error('Safety check: at least one line item would lose its SKU in the upsert payload. Aborting.');
-    }
+    // Guard: no item that had a non-empty SKU should lose it
+    const skuLoss = order.items.some((it, i) =>
+      (it.sku && typeof it.sku === 'string' && it.sku.trim().length > 0) &&
+      (!safe[i].sku || safe[i].sku.trim().length === 0)
+    );
+    if (skuLoss) throw new Error('Safety check: at least one line item would lose its SKU in the upsert payload. Aborting.');
 
     return safe;
   }
@@ -257,8 +292,10 @@ class OrderCustomsUpdater {
     const items = this.buildSafeItems(order);
 
     return {
+      // include both so we UPDATE the existing order
       orderId: order.orderId,
       orderKey: order.orderKey,
+
       orderNumber: order.orderNumber,
       orderDate: order.orderDate,
       orderStatus: order.orderStatus,
@@ -271,11 +308,12 @@ class OrderCustomsUpdater {
       shippingAmount: order.shippingAmount,
       orderTotal: order.orderTotal,
 
-      items, // <- safe, SKU-preserving
+      items, // SKU-preserving
 
       advancedOptions: order.advancedOptions,
       tagIds: order.tagIds,
 
+      // If we have lines, send merged lines; otherwise leave intl options untouched
       internationalOptions: customsItems.length
         ? { ...intl, contents: intl.contents || 'merchandise', customsItems }
         : intl
