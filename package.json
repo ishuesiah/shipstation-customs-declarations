@@ -1,19 +1,22 @@
 {
-  "name": "shipstation-customs-updater",
-  "version": "1.0.0",
+  "name": "shopify-product-manager",
+  "version": "2.0.0",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test-update": "node update-customs.js"
+    "dev": "node --watch server.js"
   },
   "dependencies": {
+    "express": "^4.18.2",
     "axios": "^1.6.0",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "@shopify/shopify-api": "^7.0.0",
-    "csv-parse": "^5.5.0",
-    "multer": "^1.4.5-lts.1",
-    "papaparse": "^5.4.1"
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "cookie-parser": "^1.4.6",
+    "express-session": "^1.17.3",
+    "sqlite3": "^5.1.6",
+    "better-sqlite3": "^9.2.2"
   },
   "engines": {
     "node": ">=18.0.0"
