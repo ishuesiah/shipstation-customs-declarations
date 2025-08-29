@@ -26,7 +26,7 @@ class OrderCustomsUpdater {
       { keywords: ['a5 notebook', 'tn notebook', 'notebook a5', 'journal a5', 'dotted notebook', 'lined notebook', 'grid notebook', 'blank notebook', 'sketchbook'], hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
       { keywords: ['notepad', 'weekly habit tracker notepad'], hsCode: '4820.10.2020', description: 'Notepad', country: 'CA' },
       { keywords: ['sticky note', 'sticky pad', 'post-it', 'stickies'], hsCode: '4820.10.2020', description: 'Sticky notepad', country: 'USA' },
-      { keywords: ['sticker', 'tabs', 'monthly tabs', 'highlight', 'stickers', 'square bullet', 'time management', 'wellness'], hsCode: '4911.99.8000', description: 'Paper sticker', country: 'CA' },
+      { keywords: ['sticker', 'tabs', 'monthly tabs', 'Monthly Tabs', 'highlight', 'stickers', 'square bullet', 'time management', 'wellness'], hsCode: '4911.99.8000', description: 'Paper sticker', country: 'CA' },
       { keywords: ['pen', 'brass', 'aluminum'], hsCode: '9608.10.0000', description: 'Gel ink pen', country: 'CA' },
       { keywords: ['pen refill', 'ink refill', 'refill'], hsCode: '9608.60.0000', description: 'Refills for ballpoint pen', country: 'JP' },
       { keywords: ['bracelet'], hsCode: '7113.11.5000', description: 'Sterling silver jewellery bracelets', country: 'CA' },
