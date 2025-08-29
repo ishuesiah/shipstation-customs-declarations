@@ -20,10 +20,12 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production',
+    secure: false,  // Change this to false
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
+    maxAge: 24 * 60 * 60 * 1000,
+    sameSite: 'lax'  // Add this
+  },
+  proxy: true  // Add this for Kinsta
 }));
 
 // Authentication middleware
