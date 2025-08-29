@@ -19,14 +19,14 @@ class OrderCustomsUpdater {
     this.errors = [];
 
     // Rules for mapping item names -> customs data
-    this.rules = [
+this.rules = [
       { keywords: ['insert', 'inserts'], hsCode: '4820.90.0000', description: 'Planner inserts (loose refills)', country: 'CA' },
-      { keywords: ['2026 planner', '2025 planner', 'undated planner', 'daily planner', 'weekly planner', 'monthly planner'], hsCode: '4820.10.2010', description: 'Planner agenda (bound diary)', country: 'CA' },
-      { keywords: ['b5 notebook', 'b5 journal', 'notebook b5', 'journal b5'], hsCode: '4820.10.2030', description: 'Notebook (sewn journal, B5 size)', country: 'CA' },
-      { keywords: ['a5 notebook', 'tn notebook', 'notebook a5', 'journal a5', 'dotted notebook', 'lined notebook', 'grid notebook', 'blank notebook', 'sketchbook'], hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
+      { keywords: ['2026 planner', '2025 planner', 'undated planner', 'daily planner', 'weekly planner',], hsCode: '4820.10.2010', description: 'Planner agenda (bound diary)', country: 'CA' },
+      { keywords: ['b5 notebook'], hsCode: '4820.10.2030', description: 'Notebook (sewn journal, B5 size)', country: 'CA' },
+      { keywords: ['a5 notebook', 'tn notebook', 'dotted notebook'], hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
       { keywords: ['notepad', 'weekly habit tracker notepad'], hsCode: '4820.10.2020', description: 'Notepad', country: 'CA' },
-      { keywords: ['sticky note', 'sticky pad', 'post-it', 'stickies'], hsCode: '4820.10.2020', description: 'Sticky notepad', country: 'USA' },
-      { keywords: ['sticker', 'tabs', 'monthly tabs', 'Monthly Tabs', 'highlight', 'stickers', 'square bullet', 'time management', 'wellness'], hsCode: '4911.99.8000', description: 'Paper sticker', country: 'CA' },
+      { keywords: ['sticky note', 'stickies'], hsCode: '4820.10.2020', description: 'Sticky notepad', country: 'USA' },
+      { keywords: ['sticker', 'tabs', 'monthly tabs', 'highlight', 'stickers', 'square bullet', 'time management', 'wellness'], hsCode: '4911.99.8000', description: 'Paper sticker', country: 'CA' },
       { keywords: ['pen', 'brass', 'aluminum'], hsCode: '9608.10.0000', description: 'Gel ink pen', country: 'CA' },
       { keywords: ['pen refill', 'ink refill', 'refill'], hsCode: '9608.60.0000', description: 'Refills for ballpoint pen', country: 'JP' },
       { keywords: ['bracelet'], hsCode: '7113.11.5000', description: 'Sterling silver jewellery bracelets', country: 'CA' },
@@ -41,6 +41,36 @@ class OrderCustomsUpdater {
     ];
   }
 
+  // --- helpers ---------------------------------------------------------------
+
+  normalize(s) {
+    return (s || '')
+      .toString()
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  tokens(s) {
+    const stop = new Set(['and','or','the','of','for','with','a','an','to','&']);
+    return this.normalize(s)
+      .split(' ')
+      .filter(Boolean)
+      .filter(t => !stop.has(t));
+  }
+
+  overlapScore(nameA, nameB) {
+    // Jaccard over item-name tokens vs description tokens, small but useful
+    const A = new Set(this.tokens(nameA));
+    const B = new Set(this.tokens(nameB));
+    if (!A.size || !B.size) return 0;
+    let inter = 0;
+    for (const t of A) if (B.has(t)) inter++;
+    return inter / (A.size + B.size - inter);
+  }
+
+  // Map name -> customs fields (case-insensitive keywords)
   getCustomsData(productName) {
     if (!productName) return null;
     const nameLower = productName.toLowerCase();
@@ -58,43 +88,102 @@ class OrderCustomsUpdater {
     return null;
   }
 
-  buildCustomsItems(order) {
-    const existing = (order.internationalOptions && order.internationalOptions.customsItems) || [];
-    const bySkuExisting = new Map();
-    for (const ci of existing) {
-      if (ci.sku) bySkuExisting.set(ci.sku, ci);
+  // Find the best existing customs line to update, WITHOUT requiring SKU.
+  // Cascade: SKU match -> exact description match (target description) -> highest token overlap.
+  findExistingLineIndex({ item, targetDesc, existing, usedIndices }) {
+    // 1) SKU
+    if (item.sku) {
+      const idx = existing.findIndex(
+        (ci, i) => !usedIndices.has(i) && ci.sku && this.normalize(ci.sku) === this.normalize(item.sku)
+      );
+      if (idx >= 0) return idx;
     }
 
-    const customsItems = [];
+    // 2) Exact description (case-insensitive) match to target description
+    if (targetDesc) {
+      const idx = existing.findIndex(
+        (ci, i) => !usedIndices.has(i) && this.normalize(ci.description) === this.normalize(targetDesc)
+      );
+      if (idx >= 0) return idx;
+    }
+
+    // 3) Best token overlap with item name
+    let bestIdx = -1;
+    let bestScore = 0;
+    for (let i = 0; i < existing.length; i++) {
+      if (usedIndices.has(i)) continue;
+      const s = this.overlapScore(item.name || '', existing[i].description || '');
+      if (s > bestScore) { bestScore = s; bestIdx = i; }
+    }
+    // Only accept a "fuzzy" match if there's some signal
+    if (bestScore >= 0.34) return bestIdx; // tweakable threshold
+
+    return -1;
+  }
+
+  // Build a merged customsItems array:
+  // - Start with ALL existing lines (so nothing is deleted)
+  // - For each item that matches a rule, update the "best" existing line if found; else append a new line.
+  // - When appending, set sku so future runs can map reliably.
+  mergeCustomsItems(order) {
+    const existing = Array.isArray(order.internationalOptions?.customsItems)
+      ? order.internationalOptions.customsItems.map(ci => ({ ...ci }))
+      : [];
+
+    const used = new Set(); // indices in `existing` we've already updated
+    const merged = existing.map(ci => ({ ...ci })); // copy to avoid mutations of original
+
     for (const item of order.items) {
       const match = this.getCustomsData(item.name);
-      if (match) {
-        customsItems.push({
-          ...(bySkuExisting.get(item.sku) && bySkuExisting.get(item.sku).customsItemId
-            ? { customsItemId: bySkuExisting.get(item.sku).customsItemId }
-            : {}),
-          sku: item.sku || undefined,
-          description: match.description,
-          quantity: item.quantity || 1,
-          value: Number(((item.unitPrice || 0) * (item.quantity || 1)).toFixed(2)),
-          harmonizedTariffCode: match.harmonizedTariffCode,
-          countryOfOrigin: match.countryOfOrigin
-          // weight optional; omit unless you want to supply it
-        });
-      } else if (bySkuExisting.has(item.sku)) {
-        // keep any existing customs line if we didn't match a rule
-        customsItems.push(bySkuExisting.get(item.sku));
+      if (!match) continue;
+
+      const targetDesc = match.description;
+      const idx = this.findExistingLineIndex({
+        item,
+        targetDesc,
+        existing: merged,
+        usedIndices: used
+      });
+
+      const newLine = {
+        // keep id if updating an existing line
+        ...(idx >= 0 && merged[idx].customsItemId ? { customsItemId: merged[idx].customsItemId } : {}),
+        // set SKU for future deterministic matching (even if the existing line lacked one)
+        sku: item.sku || (idx >= 0 ? merged[idx].sku : undefined),
+        description: targetDesc,
+        quantity: idx >= 0 ? (merged[idx].quantity || item.quantity || 1) : (item.quantity || 1),
+        value: Number(((item.unitPrice || merged[idx]?.value || 0) * (item.quantity || 1)).toFixed(2)),
+        harmonizedTariffCode: match.harmonizedTariffCode,
+        countryOfOrigin: match.countryOfOrigin
+      };
+
+      if (idx >= 0) {
+        merged[idx] = newLine;
+        used.add(idx);
+      } else {
+        // Avoid adding an identical duplicate (same desc/hts/coo/sku/qty/value)
+        const dup = merged.findIndex(ci =>
+          this.normalize(ci.description) === this.normalize(newLine.description) &&
+          (ci.harmonizedTariffCode || '') === (newLine.harmonizedTariffCode || '') &&
+          (ci.countryOfOrigin || '') === (newLine.countryOfOrigin || '') &&
+          (this.normalize(ci.sku || '') === this.normalize(newLine.sku || '')) &&
+          Number(ci.value || 0) === Number(newLine.value || 0) &&
+          Number(ci.quantity || 0) === Number(newLine.quantity || 0)
+        );
+        if (dup === -1) merged.push(newLine);
       }
     }
-    return customsItems;
+
+    return merged;
   }
 
   // Build the full upsert payload (no partial updates allowed).
   makeUpsertPayload(order, customsItems) {
+    const intl = order.internationalOptions || {};
     return {
-      // Crucial: include orderKey (ShipStation’s “import key”) so we UPDATE, not CREATE.
-      orderId: order.orderId,            // helps prevent duplicates on update
-      orderKey: order.orderKey,          // REQUIRED by their processor when updating via createorder
+      // Include both orderId + orderKey to ensure UPDATE (not create)
+      orderId: order.orderId,
+      orderKey: order.orderKey,
       orderNumber: order.orderNumber,
       orderDate: order.orderDate,
       orderStatus: order.orderStatus,
@@ -128,8 +217,8 @@ class OrderCustomsUpdater {
       tagIds: order.tagIds,
 
       internationalOptions: customsItems.length
-        ? { contents: 'merchandise', customsItems }
-        : order.internationalOptions
+        ? { ...intl, contents: intl.contents || 'merchandise', customsItems }
+        : intl // if empty, leave exactly as-is (prevents wiping)
     };
   }
 
@@ -154,13 +243,12 @@ class OrderCustomsUpdater {
       }
 
       console.log(`Found order: ${order.orderNumber} → shipTo.country=${order.shipTo?.country}, orderKey=${order.orderKey}`);
-
       console.log('Current items:');
       for (const item of order.items) {
         console.log(`  - ${item.name} (SKU: ${item.sku})`);
       }
 
-      const customsItems = this.buildCustomsItems(order);
+      const customsItems = this.mergeCustomsItems(order);
       if (!customsItems.length) {
         console.log('⏭️ No customs changes to apply.');
         return;
@@ -169,7 +257,7 @@ class OrderCustomsUpdater {
       console.log(`Applying ${customsItems.length} customs line(s)...`);
       const payload = this.makeUpsertPayload(order, customsItems);
 
-      // Safety: ensure we didn’t change line items
+      // Safety: ensure we didn’t change item lines
       const fp = arr => arr.map(i => `${i.orderItemId}:${i.sku}:${i.quantity}`).join('|');
       if (fp(order.items) !== fp(payload.items)) {
         throw new Error('Safety check failed: item lines would change. Aborting.');
@@ -217,7 +305,7 @@ class OrderCustomsUpdater {
           if (order.shipTo?.country !== countryCode) { this.skipped++; continue; }
           if (order.orderStatus !== 'awaiting_shipment') { this.skipped++; continue; }
 
-          const customsItems = this.buildCustomsItems(order);
+          const customsItems = this.mergeCustomsItems(order);
           if (!customsItems.length) { this.skipped++; continue; }
 
           try {
