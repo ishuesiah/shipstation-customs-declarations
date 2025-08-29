@@ -1,10 +1,10 @@
 // shopify-api.js - Clean Shopify API wrapper
 const axios = require('axios');
-const dotenv = require ('dotenv');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
-export class ShopifyAPI {
+class ShopifyAPI {
   constructor() {
     this.store = process.env.SHOPIFY_STORE;
     this.accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
@@ -204,3 +204,5 @@ export class ShopifyAPI {
     };
   }
 }
+
+module.exports = { ShopifyAPI };
