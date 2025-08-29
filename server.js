@@ -1,3 +1,5 @@
+// our server was like this
+
 const express = require('express');
 const multer = require('multer');
 const ShipStationCustomsUpdater = require('./update-customs');
