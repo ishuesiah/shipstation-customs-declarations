@@ -210,15 +210,17 @@ app.get('/login', (req, res) => {
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
+    console.log('Login attempt:', email); // ADD THIS
+    
     if (email !== 'info@hemlockandoak.com') {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    // Hardcoded password hash for simplicity
-    // This is the hash for "YourPasswordHere" - change it!
-    const correctPasswordHash = '$2a$10$E/A7t5iS8nhG69rBSRsqdeYOHalKofhWbb9.6r06VTRqmeAKE5yC.';
+    const correctPasswordHash = '$2a$10$...'; // your hash
     
+    console.log('Comparing passwords...'); // ADD THIS
     const validPassword = await bcrypt.compare(password, correctPasswordHash);
+    console.log('Password valid?', validPassword); // ADD THIS
     
     if (!validPassword) {
       return res.status(401).json({ error: 'Invalid password' });
@@ -226,7 +228,7 @@ app.post('/api/login', async (req, res) => {
     
     req.session.userId = 1;
     res.json({ success: true });
-  });
+});
 
 // Logout endpoint
 app.get('/logout', (req, res) => {
