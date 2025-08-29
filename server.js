@@ -210,20 +210,8 @@ app.get('/login', (req, res) => {
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
-    console.log('Login attempt:', email); // ADD THIS
-    
-    if (email !== 'info@hemlockandoak.com') {
+    if (email !== 'info@hemlockandoak.com' || password !== 'TestPassword123') {
       return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    
-    const correctPasswordHash = '$2a$10$...'; // your hash
-    
-    console.log('Comparing passwords...'); // ADD THIS
-    const validPassword = await bcrypt.compare(password, correctPasswordHash);
-    console.log('Password valid?', validPassword); // ADD THIS
-    
-    if (!validPassword) {
-      return res.status(401).json({ error: 'Invalid password' });
     }
     
     req.session.userId = 1;
