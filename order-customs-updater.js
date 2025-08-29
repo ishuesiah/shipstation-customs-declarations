@@ -12,15 +12,16 @@ const shipstationAPI = axios.create({
   timeout: 30000
 });
 
-/**
- * Controls
- * - APPEND_SKU_TO_DESC: add "— SKU ABC" to customs description text (UI can't store sku on customs lines)
- * - FORCE_INCLUDE_ITEMS: force including items in the upsert (default false). We auto-retry with items if needed.
- */
-const APPEND_SKU_TO_DESC = true;
-const FORCE_INCLUDE_ITEMS = String(process.env.SS_PATCH_ITEMS || '').toLowerCase() === 'true';
+/** Toggle: add "— SKU XYZ" to customs descriptions (disabled by default). */
+const APPEND_SKU_TO_DESC = false;
 
-/** Category dictionary */
+/** 
+ * NEW: Control whether to include SKU field in items array
+ * Set to false if ShipStation keeps clearing SKUs due to sync issues
+ */
+const INCLUDE_SKU_IN_ITEMS = false; // ← KEY CHANGE: Don't send SKU field at all
+
+/** CATEGORY DICTIONARY (canonical → customs fields) */
 const CATEGORY_TO_CUSTOMS = {
   planners:        { hsCode: '4820.10.2010', description: 'Planner agenda (bound diary)', country: 'CA' },
   a5_notebooks:    { hsCode: '4820.10.2060', description: 'Notebook (bound journal)', country: 'CA' },
@@ -82,9 +83,18 @@ class OrderCustomsUpdater {
     this.errors = [];
   }
 
-  // ---- text helpers
-  normalize(s) {
-    return (s || '').toString().toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  // ---------- helpers ----------
+  normalize(text) {
+    return (text || '')
+      .toString()
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  normalizeCategory(cat) {
+    const n = this.normalize(cat);
+    return CATEGORY_SYNONYMS[n] || n;
   }
   tokens(s) {
     const stop = new Set(['and','or','the','of','for','with','a','an','to','&']);
@@ -98,6 +108,15 @@ class OrderCustomsUpdater {
     for (const t of A) if (B.has(t)) inter++;
     return inter / (A.size + B.size - inter);
   }
+  stripSkuSuffix(desc) {
+    // remove a trailing "— SKU XXXXX" if present (so we can match old vs new text)
+    return (desc || '').replace(/\s+—\s*sku\s+[A-Za-z0-9._-]+$/i, '').trim();
+  }
+  formatDesc(base, sku) {
+    if (!APPEND_SKU_TO_DESC || !sku) return base;
+    const s = `${base} — SKU ${sku}`;
+    return s.length > 100 ? s.slice(0, 100) : s;
+  }
   scorePatternMatch(name, regex) {
     const m = (name || '').match(regex);
     if (!m) return 0;
@@ -106,11 +125,6 @@ class OrderCustomsUpdater {
     return base + lenBoost;
   }
 
-  // ---- mapping helpers
-  normalizeCategory(cat) {
-    const n = this.normalize(cat);
-    return CATEGORY_SYNONYMS[n] || n;
-  }
   customsFromDict(entry) {
     return {
       harmonizedTariffCode: entry.hsCode,
@@ -140,26 +154,27 @@ class OrderCustomsUpdater {
     return this.getCustomsByCategory(category) || this.getCustomsByName(name) || null;
   }
 
-  formatDesc(base, sku) {
-    if (!APPEND_SKU_TO_DESC || !sku) return base;
-    const out = `${base} — SKU ${sku}`;
-    return out.length > 100 ? out.slice(0, 100) : out;
-  }
-
+  // ---------- customs merging ----------
   findExistingLineIndex({ item, targetDesc, existing, used }) {
-    // 1) exact description
-    if (targetDesc) {
-      const i = existing.findIndex((ci, idx) => !used.has(idx) && this.normalize(ci.description) === this.normalize(targetDesc));
-      if (i >= 0) return i;
-    }
-    // 2) fuzzy by token overlap
-    let bestIdx = -1, best = 0;
+    // 1) Exact description (ignoring any trailing "— SKU ...")
+    const normTarget = this.normalize(this.stripSkuSuffix(targetDesc));
+    const idxDesc = existing.findIndex(
+      (ci, i) =>
+        !used.has(i) &&
+        this.normalize(this.stripSkuSuffix(ci.description)) === normTarget
+    );
+    if (idxDesc >= 0) return idxDesc;
+
+    // 2) Best fuzzy overlap
+    let bestIdx = -1;
+    let bestScore = 0;
     for (let i = 0; i < existing.length; i++) {
       if (used.has(i)) continue;
       const s = this.overlapScore(item.name || '', existing[i].description || '');
-      if (s > best) { best = s; bestIdx = i; }
+      if (s > bestScore) { bestScore = s; bestIdx = i; }
     }
-    if (best >= 0.34) return bestIdx;
+    if (bestScore >= 0.34) return bestIdx;
+
     return -1;
   }
 
@@ -191,9 +206,9 @@ class OrderCustomsUpdater {
         merged[idx] = newLine;
         used.add(idx);
       } else {
-        // prevent exact dupes
+        // Avoid exact duplicates
         const dup = merged.findIndex(ci =>
-          this.normalize(ci.description) === this.normalize(newLine.description) &&
+          this.normalize(this.stripSkuSuffix(ci.description)) === this.normalize(this.stripSkuSuffix(newLine.description)) &&
           (ci.harmonizedTariffCode || '') === (newLine.harmonizedTariffCode || '') &&
           (ci.countryOfOrigin || '') === (newLine.countryOfOrigin || '') &&
           Number(ci.value || 0) === Number(newLine.value || 0) &&
@@ -209,81 +224,70 @@ class OrderCustomsUpdater {
     return merged;
   }
 
-  // Build an items array but only for the rare fallback path.
+  // ---------- order items: always include them, but optionally omit SKU field ----------
   buildSafeItems(order) {
-    const items = order.items.map(it => ({
-      orderItemId: it.orderItemId,
-      lineItemKey: it.lineItemKey,
-      sku: typeof it.sku === 'string' ? it.sku : (it.sku ?? ''), // keep exactly what they returned
-      name: it.name,
-      quantity: it.quantity,
-      unitPrice: it.unitPrice,
-      weight: it.weight,
-      taxAmount: it.taxAmount
-    }));
+    // CHANGED: Build items WITHOUT the SKU field if INCLUDE_SKU_IN_ITEMS is false
+    const items = order.items.map(it => {
+      const itemData = {
+        orderItemId: it.orderItemId,
+        lineItemKey: it.lineItemKey,
+        name: it.name,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        weight: it.weight,
+        taxAmount: it.taxAmount
+        // Still omitting: productId, fulfillmentSku, upc, options, imageUrl
+      };
+      
+      // Only include SKU field if flag is set AND SKU exists
+      // When ShipStation's SKU sync is broken, we don't send the field at all
+      if (INCLUDE_SKU_IN_ITEMS) {
+        // Include SKU only if we want to preserve it
+        itemData.sku = typeof it.sku === 'string' ? it.sku : (it.sku ?? '');
+      }
+      // If INCLUDE_SKU_IN_ITEMS is false, we simply don't add the sku field to the object
+      
+      return itemData;
+    });
 
-    // Guard: never let a non-empty SKU go empty
-    const skuLoss = order.items.some((it, i) =>
-      (it.sku && typeof it.sku === 'string' && it.sku.trim()) &&
-      (!items[i].sku || !items[i].sku.trim())
-    );
-    if (skuLoss) throw new Error('Safety: an item would lose its SKU. Aborting.');
+    // Only do SKU safety check if we're including SKUs
+    if (INCLUDE_SKU_IN_ITEMS) {
+      const skuLoss = order.items.some((it, i) =>
+        (it.sku && typeof it.sku === 'string' && it.sku.trim()) &&
+        (!items[i].sku || !items[i].sku.trim())
+      );
+      if (skuLoss) throw new Error('Safety: at least one line item would lose its SKU. Aborting.');
+    }
 
     return items;
   }
 
-  makePartialPayload(order, customsItems, includeItems) {
+  makeUpsertPayload(order, customsItems) {
     const intl = order.internationalOptions || {};
-    const payload = {
+    return {
       orderId: order.orderId,
-      orderKey: order.orderKey,     // critical to UPDATE, not CREATE
+      orderKey: order.orderKey, // ensures UPDATE, not CREATE
       orderNumber: order.orderNumber,
       orderDate: order.orderDate,
       orderStatus: order.orderStatus,
-      billTo: order.billTo,
-      shipTo: order.shipTo,
       customerUsername: order.customerUsername,
       customerEmail: order.customerEmail,
+      billTo: order.billTo,
+      shipTo: order.shipTo,
       amountPaid: order.amountPaid,
       taxAmount: order.taxAmount,
       shippingAmount: order.shippingAmount,
       orderTotal: order.orderTotal,
+
+      items: this.buildSafeItems(order), // ← keep items but maybe without SKU field
+
       advancedOptions: order.advancedOptions,
       tagIds: order.tagIds,
+
       internationalOptions: customsItems.length
         ? { ...intl, contents: intl.contents || 'merchandise', customsItems }
         : intl
     };
-    if (includeItems) payload.items = this.buildSafeItems(order);
-    return payload;
-  }
-
-  async upsertOrder(order, customsItems) {
-    const tryWithoutItems = !FORCE_INCLUDE_ITEMS;
-    if (tryWithoutItems) {
-      const payload = this.makePartialPayload(order, customsItems, false);
-      try {
-        await shipstationAPI.post('/orders/createorder', payload);
-        return { usedItemsArray: false };
-      } catch (e) {
-        const code = e.response?.status;
-        const msg = JSON.stringify(e.response?.data || e.message);
-        console.warn('Item-less patch was rejected:', code, msg);
-        // fall through to retry with items
-      }
-    }
-    const payloadWithItems = this.makePartialPayload(order, customsItems, true);
-
-    // Safety: fingerprint before we send
-    const fp = arr => arr.map(i => `${i.orderItemId}:${i.sku || ''}:${i.quantity}`).join('|');
-    const before = fp(order.items);
-    const after  = fp(payloadWithItems.items);
-    if (before !== after) {
-      throw new Error('Safety: item fingerprint would change (SKU and/or qty). Aborting.');
-    }
-
-    await shipstationAPI.post('/orders/createorder', payloadWithItems);
-    return { usedItemsArray: true };
   }
 
   async updateSingleOrder(orderNumber) {
@@ -306,7 +310,12 @@ class OrderCustomsUpdater {
       }
 
       console.log(`Found: ${order.orderNumber} → shipTo.country=${order.shipTo?.country}, orderKey=${order.orderKey}`);
-      for (const it of order.items) console.log(`  - ${it.name} (SKU: ${it.sku})`);
+      console.log(`SKU handling: ${INCLUDE_SKU_IN_ITEMS ? 'Including in payload' : 'Omitting from payload (broken sync)'}`);
+      
+      for (const it of order.items) {
+        const skuInfo = it.sku ? `SKU: ${it.sku}` : 'SKU: [missing]';
+        console.log(`  - ${it.name} (${skuInfo})`);
+      }
 
       const customsItems = this.mergeCustomsItems(order);
       if (!customsItems.length) {
@@ -314,9 +323,49 @@ class OrderCustomsUpdater {
         return;
       }
 
-      console.log(`Applying ${customsItems.length} customs line(s)... (FORCE_INCLUDE_ITEMS=${FORCE_INCLUDE_ITEMS})`);
-      const result = await this.upsertOrder(order, customsItems);
-      console.log(`✓ Upserted order ${orderNumber} (${result.usedItemsArray ? 'with' : 'without'} items in payload).`);
+      const payload = this.makeUpsertPayload(order, customsItems);
+
+      // Modified fingerprint check - only include SKU if we're sending it
+      const fp = arr => arr.map(i => {
+        if (INCLUDE_SKU_IN_ITEMS) {
+          return `${i.orderItemId}:${i.sku || ''}:${i.quantity}`;
+        } else {
+          return `${i.orderItemId}:${i.quantity}`; // Skip SKU in fingerprint if not including
+        }
+      }).join('|');
+      
+      // Only compare fingerprints if we're including SKUs
+      if (INCLUDE_SKU_IN_ITEMS) {
+        if (fp(order.items) !== fp(payload.items)) {
+          throw new Error('Safety: item fingerprint would change (SKU and/or qty). Aborting.');
+        }
+      }
+
+      console.log(`Applying ${customsItems.length} customs line(s)...`);
+      
+      // Debug: Log what we're sending (first item only for brevity)
+      if (payload.items.length > 0) {
+        console.log('Sample item being sent:', JSON.stringify(payload.items[0], null, 2));
+      }
+      
+      await shipstationAPI.post('/orders/createorder', payload);
+
+      // Modified verification - only check SKUs if we were trying to preserve them
+      if (INCLUDE_SKU_IN_ITEMS) {
+        const verify = await shipstationAPI.get('/orders', { params: { orderNumber } });
+        const after = verify.data.orders?.[0];
+        if (after) {
+          const lost = after.items.some((it, i) =>
+            (order.items[i]?.sku && order.items[i]?.sku.trim()) && (!it.sku || !it.sku.trim())
+          );
+          if (lost) {
+            console.warn('⚠️ Post-update warning: SKU disappeared despite being in payload.');
+            console.warn('   Consider setting INCLUDE_SKU_IN_ITEMS = false');
+          }
+        }
+      }
+
+      console.log(`✓ Upserted order ${orderNumber} with customs data.`);
     } catch (error) {
       console.error('Error:', error.response?.data || error.message);
     }
@@ -329,7 +378,8 @@ class OrderCustomsUpdater {
     console.log('BULK CUSTOMS UPDATE');
     console.log('========================================\n');
     console.log(`Target country: ${countryCode}`);
-    console.log(`Order status: ${orderStatus}\n`);
+    console.log(`Order status: ${orderStatus}`);
+    console.log(`SKU handling: ${INCLUDE_SKU_IN_ITEMS ? 'Including in payload' : 'Omitting from payload'}\n`);
 
     try {
       let page = 1;
@@ -355,7 +405,8 @@ class OrderCustomsUpdater {
           if (!customsItems.length) { this.skipped++; continue; }
 
           try {
-            await this.upsertOrder(order, customsItems);
+            const payload = this.makeUpsertPayload(order, customsItems);
+            await shipstationAPI.post('/orders/createorder', payload);
             this.updated++;
             console.log(`✓ Updated ${order.orderNumber} (${customsItems.length} customs line(s))`);
           } catch (e) {
