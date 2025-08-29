@@ -1,11 +1,10 @@
 // server.js - Clean slate Shopify Product Manager
-import express from 'express';
-import dotenv from 'dotenv';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import cookieParser from 'cookie-parser';
-import session from 'express-session';
-import { ShopifyAPI } from './shopify-api.js';
+const express = require('express');
+const dotenv = require('dotenv');
+const bcrypt = require('bcryptjs');
+const cookieParser = require('cookie-parser');
+const session = require('express-session');
+const { ShopifyAPI } = require('./shopify-api.js');
 
 dotenv.config();
 
@@ -217,7 +216,7 @@ app.post('/api/login', async (req, res) => {
     
     // Hardcoded password hash for simplicity
     // This is the hash for "YourPasswordHere" - change it!
-    const correctPasswordHash = '$2a$10$YQX3jPG8nCpJL5Q8YMrxLuR5X2KhS5vG7LN8jXK9XhT5Gg5Q8YMrxL';
+    const correctPasswordHash = '$2a$10$E/A7t5iS8nhG69rBSRsqdeYOHalKofhWbb9.6r06VTRqmeAKE5yC.';
     
     const validPassword = await bcrypt.compare(password, correctPasswordHash);
     
@@ -228,72 +227,6 @@ app.post('/api/login', async (req, res) => {
     req.session.userId = 1;
     res.json({ success: true });
   });
-
-// Setup endpoint (only works if no user exists)
-app.get('/setup', async (req, res) => {
-  const existingUser = db.prepare('SELECT * FROM users WHERE email = ?').get('info@hemlockandoak.com');
-  
-  if (existingUser) {
-    return res.send('Account already exists. Please login.');
-  }
-  
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Setup Account</title>
-      <style>
-        body { 
-          font-family: -apple-system, sans-serif; 
-          max-width: 400px; 
-          margin: 100px auto; 
-          padding: 20px;
-        }
-        input, button { 
-          width: 100%; 
-          padding: 10px; 
-          margin: 10px 0; 
-          border-radius: 8px;
-          border: 1px solid #ddd;
-        }
-        button {
-          background: #667eea;
-          color: white;
-          border: none;
-          cursor: pointer;
-        }
-      </style>
-    </head>
-    <body>
-      <h2>Create Password</h2>
-      <form method="POST" action="/setup">
-        <input type="password" name="password" placeholder="Enter password" required minlength="8">
-        <input type="password" name="confirm" placeholder="Confirm password" required minlength="8">
-        <button type="submit">Create Account</button>
-      </form>
-    </body>
-    </html>
-  `);
-});
-
-app.post('/setup', async (req, res) => {
-  const { password, confirm } = req.body;
-  
-  if (password !== confirm) {
-    return res.send('Passwords do not match. <a href="/setup">Try again</a>');
-  }
-  
-  const existingUser = db.prepare('SELECT * FROM users WHERE email = ?').get('info@hemlockandoak.com');
-  
-  if (existingUser) {
-    return res.send('Account already exists. <a href="/login">Login</a>');
-  }
-  
-  const hashedPassword = await bcrypt.hash(password, 10);
-  db.prepare('INSERT INTO users (email, password) VALUES (?, ?)').run('info@hemlockandoak.com', hashedPassword);
-  
-  res.send('Account created successfully! <a href="/login">Login now</a>');
-});
 
 // Logout endpoint
 app.get('/logout', (req, res) => {
@@ -1058,10 +991,6 @@ app.get('/api/products', requireAuth, async (req, res) => {
     });
     
     // Log duplicates to database
-    if (duplicates.length > 0) {
-      const stmt = db.prepare('INSERT INTO error_log (type, message, details) VALUES (?, ?, ?)');
-      stmt.run('duplicate_sku', `Found ${duplicates.length} duplicate SKUs`, JSON.stringify(duplicates));
-    }
     
     res.json({ 
       products, 

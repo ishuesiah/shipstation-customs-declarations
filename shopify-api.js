@@ -1,6 +1,6 @@
 // shopify-api.js - Clean Shopify API wrapper
-import axios from 'axios';
-import dotenv from 'dotenv';
+const axios = require('axios');
+const dotenv = require ('dotenv');
 
 dotenv.config();
 

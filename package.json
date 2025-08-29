@@ -2,7 +2,6 @@
   "name": "shopify-product-manager",
   "version": "2.0.0",
   "main": "server.js",
-  "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
@@ -12,11 +11,8 @@
     "axios": "^1.6.0",
     "dotenv": "^16.3.1",
     "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2",
     "cookie-parser": "^1.4.6",
-    "express-session": "^1.17.3",
-    "sqlite3": "^5.1.6",
-    "better-sqlite3": "^9.2.2"
+    "express-session": "^1.17.3"
   },
   "engines": {
     "node": ">=18.0.0"
