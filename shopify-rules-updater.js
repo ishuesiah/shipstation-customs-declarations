@@ -1,3 +1,5 @@
+//shoify rules updater... an attempt to update HS codes in Shopify. Didn't fully work but we don't need this now 
+
 const axios = require('axios');
 require('dotenv').config();
 
