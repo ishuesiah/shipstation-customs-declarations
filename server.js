@@ -734,6 +734,7 @@ app.get('/', requireAuth, (req, res) => {
               skuCell.className = isDuplicate ? 'editable sku-error' : 'editable';
               skuCell.innerHTML = \`<span onclick="makeEditable(this, '\${variantId}', 'sku')" data-variant-id="\${variantId}" data-field="sku" class="editable-span">\${variant.sku || ''}</span>\`;
               
+
               // Price (editable)
               const priceCell = row.insertCell();
               priceCell.className = 'editable';
