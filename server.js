@@ -703,115 +703,159 @@ app.get('/', requireAuth, (req, res) => {
           }
         }
         
-        function renderTable() {
-          const tbody = document.getElementById('productTableBody');
-          tbody.innerHTML = '';
-          
-          products.forEach(product => {
-            product.variants.forEach(variant => {
-              const row = tbody.insertRow();
-              const isDuplicate = duplicateSkus.has(variant.sku);
-              const variantId = variant.id;
-               
-              // Checkbox area
-              const checkCell = row.insertCell();
-              checkCell.innerHTML = \`<input type="checkbox" class="select-for-update" data-variant-id="\${variantId}">\`;
+         function renderTable() {
+    const tbody = document.getElementById('productTableBody');
+    tbody.innerHTML = '';
 
-              // Status cell
-              const statusCell = row.insertCell();
-              if (isDuplicate) {
-                statusCell.innerHTML = '<span class="duplicate-indicator">DUPLICATE</span>';
-              }
-              
-              // Product title
-              row.insertCell().textContent = product.title;
-              
-              // Variant title
-              row.insertCell().textContent = variant.title || 'Default';
-              
-              // SKU (editable)
-              const skuCell = row.insertCell();
-              skuCell.className = isDuplicate ? 'editable sku-error' : 'editable';
-              skuCell.innerHTML = \`<span onclick="makeEditable(this, '\${variantId}', 'sku')" data-variant-id="\${variantId}" data-field="sku" class="editable-span">\${variant.sku || ''}</span>\`;
-              
+    products.forEach(product => {
+      product.variants.forEach(variant => {
+        const row = tbody.insertRow();
+        const variantId = variant.id;
 
-              // Price (editable)
-              const priceCell = row.insertCell();
-              priceCell.className = 'editable';
-              priceCell.innerHTML = \`<span onclick="makeEditable(this, '\${variantId}', 'price')">$\${variant.price}</span>\`;
-              
-              // Inventory
-              row.insertCell().textContent = variant.inventory_quantity || '0';
-              
-              // Weight (editable)
-              const weightCell = row.insertCell();
-              weightCell.className = 'editable';
-              weightCell.innerHTML = \`<span onclick="makeEditable(this, '\${variantId}', 'weight')">\${variant.weight || ''}</span>\`;
-              
-              // HS Code (editable)
-              const hsCell = row.insertCell();
-              hsCell.className = 'editable';
-              hsCell.innerHTML = \`<span onclick="makeEditable(this, '\${variantId}', 'harmonized_system_code')">\${variant.harmonized_system_code || ''}</span>\`;
-              
-              // Country (editable)
-              const countryCell = row.insertCell();
-              countryCell.className = 'editable';
-              countryCell.innerHTML = \`<span onclick="makeEditable(this, '\${variantId}', 'country_code_of_origin')">\${variant.country_code_of_origin || ''}</span>\`;
-              
-              // Store row reference
-              row.dataset.variantId = variantId;
-              row.dataset.productTitle = product.title.toLowerCase();
-              row.dataset.variantTitle = (variant.title || '').toLowerCase();
-              row.dataset.sku = (variant.sku || '').toLowerCase();
-            });
-          });
-        }
+        // Staged (unsaved) edits for this variant
+        const staged = modifiedData.get(variantId) || {};
+        const getVal = (field, fallback = '') =>
+          (staged[field] !== undefined ? staged[field] : (variant[field] ?? fallback));
+
+        const sku     = getVal('sku', '') || '';
+        const price   = getVal('price', '') === '' ? '' : String(getVal('price'));
+        const weight  = getVal('weight', '') === '' ? '' : String(getVal('weight'));
+        const hs      = getVal('harmonized_system_code', '') || '';
+        const country = getVal('country_code_of_origin', '') || '';
+
+        const isDuplicate = duplicateSkus.has(sku);
+
+        // Select
+        const checkCell = row.insertCell();
+        checkCell.innerHTML = `<input type="checkbox" class="select-for-update" data-variant-id="${variantId}">`;
+
+        // Status
+        const statusCell = row.insertCell();
+        if (isDuplicate) statusCell.innerHTML = '<span class="duplicate-indicator">DUPLICATE</span>';
+
+        // Product & variant titles
+        row.insertCell().textContent = product.title;
+        row.insertCell().textContent = variant.title || 'Default';
+
+        // SKU (editable)
+        const skuCell = row.insertCell();
+        skuCell.className = isDuplicate ? 'editable sku-error' : 'editable';
+        skuCell.innerHTML = `<span onclick="makeEditable(this, '${variantId}', 'sku')">${sku}</span>`;
+        if (staged.sku !== undefined) skuCell.classList.add('cell-modified');
+
+        // Price (editable)
+        const priceCell = row.insertCell();
+        priceCell.className = 'editable';
+        priceCell.innerHTML = `<span onclick="makeEditable(this, '${variantId}', 'price')">${price !== '' ? '$' + price : ''}</span>`;
+        if (staged.price !== undefined) priceCell.classList.add('cell-modified');
+
+        // Inventory (read-only)
+        row.insertCell().textContent = variant.inventory_quantity || '0';
+
+        // Weight (editable)
+        const weightCell = row.insertCell();
+        weightCell.className = 'editable';
+        weightCell.innerHTML = `<span onclick="makeEditable(this, '${variantId}', 'weight')">${weight !== '' ? weight : ''}</span>`;
+        if (staged.weight !== undefined) weightCell.classList.add('cell-modified');
+
+        // HS Code (editable)
+        const hsCell = row.insertCell();
+        hsCell.className = 'editable';
+        hsCell.innerHTML = `<span onclick="makeEditable(this, '${variantId}', 'harmonized_system_code')">${hs}</span>`;
+        if (staged.harmonized_system_code !== undefined) hsCell.classList.add('cell-modified');
+
+        // Country (editable)
+        const countryCell = row.insertCell();
+        countryCell.className = 'editable';
+        countryCell.innerHTML = `<span onclick="makeEditable(this, '${variantId}', 'country_code_of_origin')">${country}</span>`;
+        if (staged.country_code_of_origin !== undefined) countryCell.classList.add('cell-modified');
+
+        // Row metadata for filtering/search
+        row.dataset.variantId    = variantId;
+        row.dataset.productTitle = product.title.toLowerCase();
+        row.dataset.variantTitle = (variant.title || '').toLowerCase();
+        row.dataset.sku          = (sku || '').toLowerCase();
+      });
+    });
+  }
         
-        function makeEditable(span, variantId, field) {
-          const currentValue = span.textContent.replace('$', '');
-          const input = document.createElement('input');
-          input.type = field === 'price' || field === 'weight' ? 'number' : 'text';
-          input.value = currentValue;
-          
-          if (field === 'price') input.step = '0.01';
-          if (field === 'weight') input.step = '1';
-          
-          input.onblur = () => saveEdit(input, span, variantId, field);
-          input.onkeypress = (e) => {
-            if (e.key === 'Enter') {
-              input.blur();
-            }
-          };
-          
-          span.parentElement.innerHTML = '';
-          span.parentElement.appendChild(input);
-          input.focus();
-          input.select();
-        }
+       function makeEditable(span, variantId, field) {
+    // Pull the current display value
+    let raw = span.textContent.trim();
+
+    if (field === 'price') {
+      // Strip currency/commas; keep a valid numeric string
+      raw = raw.replace(/[^0-9.,\-]/g, '').replace(/,/g, '');
+    }
+
+    const input = document.createElement('input');
+    input.type = (field === 'price' || field === 'weight') ? 'number' : 'text';
+
+    if (field === 'price')  input.step = '0.01';
+    if (field === 'weight') input.step = '1';
+
+    if (field === 'price' || field === 'weight') {
+      const n = raw === '' ? '' : Number(raw);
+      input.value = Number.isFinite(n) ? String(n) : '';
+    } else {
+      input.value = raw;
+    }
+
+    input.onblur = () => saveEdit(input, span, variantId, field);
+    input.onkeypress = (e) => { if (e.key === 'Enter') input.blur(); };
+
+    const cell = span.parentElement;
+    cell.innerHTML = '';
+    cell.appendChild(input);
+    input.focus();
+    input.select();
+  }
+
         
         function saveEdit(input, originalSpan, variantId, field) {
-          const newValue = input.value;
-          const cell = input.parentElement;
-          
-          // Store the change
-          if (!modifiedData.has(variantId)) {
-            modifiedData.set(variantId, {});
-          }
-          modifiedData.get(variantId)[field] = newValue;
-          
-          // Update display
-          let displayValue = newValue;
-          if (field === 'price' && newValue) displayValue = '$' + newValue;
-          
-          cell.innerHTML = \`<span onclick="makeEditable(this, '\${variantId}', '\${field}')">\${displayValue}</span>\`;
-          cell.classList.add('cell-modified');
-          
-          updateStats();
-          checkForDuplicateSku(newValue, field);
+    let newValue = input.value;
+
+    // Normalize numeric fields
+    if (field === 'price' || field === 'weight') {
+      newValue = newValue === '' ? '' : String(Number(newValue));
+      if (newValue !== '' && !Number.isFinite(Number(newValue))) {
+        // invalid: restore previous display
+        const cell = input.parentElement;
+        const prev = originalSpan.textContent;
+        cell.innerHTML = `<span onclick="makeEditable(this, '${variantId}', '${field}')">${prev}</span>`;
+        return;
+      }
+    }
+
+    // Record change
+    if (!modifiedData.has(variantId)) modifiedData.set(variantId, {});
+    modifiedData.get(variantId)[field] = newValue;
+
+    // Rebuild cell
+    const cell = input.parentElement;
+    let display = newValue;
+    if (field === 'price' && newValue !== '') display = '$' + newValue;
+
+    skuCell.innerHTML = \<span onclick="makeEditable(this, '\${variantId}', 'sku')" data-variant-id="\${variantId}" data-field="sku" class="editable-span">\${variant.sku || ''}</span>\;
+    cell.classList.add('cell-modified');
+
+    // If SKU changed, recompute duplicates based on *staged* values
+    if (field === 'sku') {
+      const skuCounts = {};
+      products.forEach(p => p.variants.forEach(v => {
+        let s = v.sku || '';
+        if (modifiedData.has(v.id) && modifiedData.get(v.id).sku !== undefined) {
+          s = modifiedData.get(v.id).sku || '';
         }
-        
-        function checkForDuplicateSku(value, field) {
-          if (field !== 'sku') return;
+        if (s) skuCounts[s] = (skuCounts[s] || 0) + 1;
+      }));
+      duplicateSkus.clear();
+      Object.entries(skuCounts).forEach(([s, c]) => { if (c > 1) duplicateSkus.add(s); });
+      renderTable();
+    }
+
+    updateStats();
+  }
           
           // Recheck for duplicates
           const skuCounts = {};
