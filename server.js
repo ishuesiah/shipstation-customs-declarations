@@ -628,6 +628,7 @@ app.get('/', requireAuth, (req, res) => {
         <table id="productTable">
           <thead>
             <tr>
+              <th>Select</th>
               <th>Status</th>
               <th>Product Title</th>
               <th>Variant</th>
@@ -711,7 +712,11 @@ app.get('/', requireAuth, (req, res) => {
               const row = tbody.insertRow();
               const isDuplicate = duplicateSkus.has(variant.sku);
               const variantId = variant.id;
-              
+               
+              // Checkbox area
+              const checkCell = row.insertCell();
+            checkCell.innerHTML = '<input type="checkbox" class="select-for-update" data-variant-id="${variantId}">';
+
               // Status cell
               const statusCell = row.insertCell();
               if (isDuplicate) {
@@ -727,7 +732,7 @@ app.get('/', requireAuth, (req, res) => {
               // SKU (editable)
               const skuCell = row.insertCell();
               skuCell.className = isDuplicate ? 'editable sku-error' : 'editable';
-              skuCell.innerHTML = \`<span onclick="makeEditable(this, '\${variantId}', 'sku')">\${variant.sku || ''}</span>\`;
+              skuCell.innerHTML = \`<span data-variant-id="\${variantId}" data-field="sku" class="editable-span">\${variant.sku || ''}</span>\`;
               
               // Price (editable)
               const priceCell = row.insertCell();

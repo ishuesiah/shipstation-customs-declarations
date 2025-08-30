@@ -203,6 +203,27 @@ class ShopifyAPI {
       missing: missing
     };
   }
+  // Add this method to ShopifyAPI class
+async getInventoryItems(variantIds) {
+    const inventoryItems = {};
+    
+    for (const variantId of variantIds) {
+      await this.rateLimit();
+      try {
+        // First get the variant to find its inventory_item_id
+        const variantResponse = await this.client.get(`/variants/${variantId}.json`);
+        const inventoryItemId = variantResponse.data.variant.inventory_item_id;
+        
+        // Then get the inventory item
+        const itemResponse = await this.client.get(`/inventory_items/${inventoryItemId}.json`);
+        inventoryItems[variantId] = itemResponse.data.inventory_item;
+      } catch (error) {
+        console.error(`Failed to get inventory item for variant ${variantId}`);
+      }
+    }
+    
+    return inventoryItems;
+  }
 }
 
 module.exports = { ShopifyAPI };
