@@ -727,7 +727,7 @@ app.get('/', requireAuth, (req, res) => {
 
         // Select
         const checkCell = row.insertCell();
-        checkCell.innerHTML = `<input type="checkbox" class="select-for-update" data-variant-id="${variantId}">`;
+        skuCell.innerHTML = \<span onclick="makeEditable(this, '\${variantId}', 'sku')" data-variant-id="\${variantId}" data-field="sku" class="editable-span">\${variant.sku || ''}</span>\;
 
         // Status
         const statusCell = row.insertCell();
