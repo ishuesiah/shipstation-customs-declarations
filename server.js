@@ -715,7 +715,7 @@ app.get('/', requireAuth, (req, res) => {
                
               // Checkbox area
               const checkCell = row.insertCell();
-            checkCell.innerHTML = `<input type="checkbox" class="select-for-update" data-variant-id="${variantId}">`;
+              checkCell.innerHTML = \`<input type="checkbox" class="select-for-update" data-variant-id="\${variantId}">\`;
 
               // Status cell
               const statusCell = row.insertCell();
