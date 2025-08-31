@@ -1,15 +1,2 @@
-# ignore local env files
 .env
-*.log
-.DS_Store
-.env.local
-.env.*.local
-.env.*        # any other variants
-!.env.example # but keep the template in git
-
-# common noise
-.DS_Store
 node_modules/
-dist/
-build/
-.next/
