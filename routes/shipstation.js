@@ -1,14 +1,21 @@
 'use strict';
-
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const express = require('express');
 const router = express.Router();
-const fs = require('fs');
+const fs = require('fs').promises;  // Use fs.promises for async operations
+const fsSync = require('fs');       // Keep sync version for readFileSync
 const path = require('path');
 
 const { ShipStationAPI } = require('../shipstation-api.js');
 const { requireAuth, requireAuthApi } = require('../utils/auth-middleware');
 
-const { getHS, pickCustomsDescription, normHS } = require('../utils/customs-rules');
+const { 
+  getHS, 
+  pickCustomsDescription, 
+  normHS,
+  identifyProductFromTitle,
+  getCorrectHSAndDescription 
+} = require('../utils/customs-rules');
 const { _norm, _scoreNameMatch, _nameVariants } = require('../utils/fuzzy-matching');
 const {
   isOpen,
@@ -22,8 +29,8 @@ const {
 // Client + API
 const shipstation = new ShipStationAPI();
 
-// UI
-const shipstationEditorHTML = fs.readFileSync(path.join(__dirname, '../views/shipstation-editor.html'), 'utf8');
+// UI - use sync version for initial HTML load
+const shipstationEditorHTML = fsSync.readFileSync(path.join(__dirname, '../views/shipstation-editor.html'), 'utf8');
 router.get('/shipstation', requireAuth, (_req, res) => res.send(shipstationEditorHTML));
 
 /* ------------------------------- Helpers -------------------------------- */
@@ -252,39 +259,82 @@ async function tryCreateOrUpdate(body, tag) {
 
 /* --------------------------------- API ---------------------------------- */
 
-// Scan open US orders for description/HS mismatches
+// SCAN ROUTE 
 router.get('/api/shipstation/orders/scan', requireAuthApi, async (req, res) => {
   try {
-    const days = Math.max(1, Math.min(180, Number(req.query.days || 30)));
-    const pageSize = Math.max(25, Math.min(200, Number(req.query.pageSize || 100)));
-    const maxPages = Math.max(1, Math.min(50, Number(req.query.maxPages || 5)));
+    const days = Math.max(1, Math.min(365, Number(req.query.days || 30)));
+    const pageSize = Math.max(25, Math.min(200, Number(req.query.pageSize || 200)));
+    const maxPages = Math.max(1, Math.min(50, Number(req.query.maxPages || 10)));
+    
     const since = new Date(Date.now() - days * 864e5).toISOString();
     const statuses = ['awaiting_shipment','awaiting_payment','on_hold'];
     const seen = new Set(), candidates = [];
+    const allUsOrders = []; // Track ALL US orders checked
+    
+    let totalScanned = 0;
+    let usOrders = 0;
+    let nonUsOrders = 0;
+    const scanLog = [];
+    
+    console.log(`Starting scan for ${days} days of orders...`);
+    scanLog.push(`Starting scan for ${days} days (since ${since.split('T')[0]})`);
 
     for (const status of statuses) {
       let page = 1;
       while (page <= maxPages) {
+        console.log(`Scanning ${status} - page ${page}...`);
+        scanLog.push(`Fetching ${status} orders - page ${page}...`);
+        
+        await delay(1500);
+        
         const list = await shipstation.searchOrders({
-          modifyDateStart: since,
+          createDateStart: since,
           orderStatus: status,
-          sortBy: 'ModifyDate',
+          sortBy: 'OrderDate',
           sortDir: 'DESC',
           page,
           pageSize
         });
+        
+        console.log(`Got ${list.length} orders from page ${page}`);
         if (!list.length) break;
+        scanLog.push(`Found ${list.length} ${status} orders on page ${page}`);
+        totalScanned += list.length;
 
         for (const o of list) {
           if (seen.has(o.orderId)) continue;
           seen.add(o.orderId);
-          if (!isUS(o)) continue;
-
+          
+          if (!isUS(o)) {
+            nonUsOrders++;
+            continue;
+          }
+          
+          usOrders++;
+          
+          await delay(100);
+          
           const full = await shipstation.getOrder(o.orderId);
+          
+          // Track ALL US orders with their items
+          allUsOrders.push({
+            orderId: full.orderId,
+            orderNumber: full.orderNumber,
+            orderDate: full.orderDate,
+            shipTo: full.shipTo,
+            status: full.orderStatus,
+            items: (full.items || []).map(i => ({
+              name: i.name,
+              sku: i.sku,
+              quantity: i.quantity
+            }))
+          });
+          
           if (!isOpen(full)) continue;
-
+          
           const { canUpdate, diff, analysis } = buildCustomsPatch(full);
           if (canUpdate && diff.length > 0) {
+            // Include item details with the candidates
             candidates.push({
               orderId: full.orderId,
               orderNumber: full.orderNumber,
@@ -292,18 +342,43 @@ router.get('/api/shipstation/orders/scan', requireAuthApi, async (req, res) => {
               shipTo: full.shipTo,
               changes: diff.length,
               diff,
-              analysis
+              analysis,
+              items: (full.items || []).map(i => ({
+                name: i.name,
+                sku: i.sku,
+                quantity: i.quantity
+              }))
             });
+            scanLog.push(`✓ Order #${full.orderNumber} needs ${diff.length} fixes`);
           }
         }
+        
         if (list.length < pageSize) break;
         page++;
       }
     }
-    res.json({ scannedDays: days, totalCandidates: candidates.length, candidates });
+    
+    scanLog.push(`Scan complete: ${totalScanned} total, ${usOrders} US, ${nonUsOrders} non-US, ${candidates.length} need fixes`);
+    console.log(`Scan complete. Scanned ${totalScanned} orders, found ${candidates.length} needing updates.`);
+    
+    res.json({ 
+      scannedDays: days, 
+      totalScanned, 
+      usOrders,
+      nonUsOrders,
+      totalCandidates: candidates.length, 
+      candidates,
+      allUsOrders,  // Now includes all US orders checked
+      scanLog 
+    });
   } catch (err) {
     const status = err.response?.status || err.status || 500;
     const msg = err.response?.data?.message || err.response?.data || err.message;
+    
+    if (status === 429) {
+      console.log('Rate limit hit - consider increasing delays');
+    }
+    
     res.status(status).json({ error: msg });
   }
 });
@@ -315,22 +390,21 @@ router.get('/api/shipstation/orders/export.csv', requireAuthApi, async (req, res
     const pageSize = Math.max(25, Math.min(200, Number(req.query.pageSize || 100)));
     const maxPages = Math.max(1, Math.min(50, Number(req.query.maxPages || 5)));
     const scope = String(req.query.scope || 'mismatched').toLowerCase();
-    const mode  = String(req.query.mode || 'item').toLowerCase();
 
-    const statuses = (req.query.statuses
-      ? String(req.query.statuses).split(',').map(s => s.trim()).filter(Boolean)
-      : (scope === 'all'
-          ? ['awaiting_payment','awaiting_shipment','on_hold','shipped','delivered']
-          : ['awaiting_payment','awaiting_shipment','on_hold']
-        )
-    );
+    const statuses = ['awaiting_payment','awaiting_shipment','on_hold'];
+    if (scope === 'all') {
+      statuses.push('shipped', 'delivered');
+    }
 
     const since = new Date(Date.now() - days * 864e5).toISOString();
     const seen = new Set(), orders = [];
 
+    // Fetch orders
     for (const status of statuses) {
       let page = 1;
       while (page <= maxPages) {
+        await delay(1500); // Rate limit protection
+        
         const list = await shipstation.searchOrders({
           modifyDateStart: since,
           orderStatus: status,
@@ -339,77 +413,158 @@ router.get('/api/shipstation/orders/export.csv', requireAuthApi, async (req, res
           page,
           pageSize
         });
+        
         if (!list.length) break;
+        
         for (const o of list) {
           if (seen.has(o.orderId)) continue;
           seen.add(o.orderId);
           if (!isUS(o)) continue;
+          
+          await delay(100); // Small delay between individual order fetches
           const full = await shipstation.getOrder(o.orderId);
           orders.push(full);
         }
+        
         if (list.length < pageSize) break;
         page++;
       }
     }
 
     const rows = [];
+    
     for (const order of orders) {
       const { canUpdate, analysis, anyCustomsChange } = buildCustomsPatch(order);
-      if (!canUpdate) continue;
+      
+      // For mismatched scope, skip orders with no changes needed
       if (scope === 'mismatched' && !anyCustomsChange) continue;
-
-      const { patched: withSkus } = await fillMissingSkus(order);
-      const { customsSkuPlan, patched: mappedOrder } = syncCustomsSkus(withSkus);
-
-      const intl = mappedOrder.internationalOptions || {};
-      const customs = Array.isArray(intl.customsItems) ? intl.customsItems : [];
-      const items   = Array.isArray(mappedOrder.items) ? mappedOrder.items : [];
-      const analysisByIndex = new Map((analysis || []).map(a => [a.index, a]));
-
-      if (mode === 'item') {
-        items.forEach((it, idx) => {
-          const link = customsSkuPlan.find(c => c.itemIndex === idx) || null;
-          const a = link ? analysisByIndex.get(link.index) : null;
-          rows.push({
-            orderId: order.orderId, orderNumber: order.orderNumber, orderDate: order.orderDate, orderStatus: order.orderStatus,
-            shipToCity: order?.shipTo?.city || '', shipToState: order?.shipTo?.state || '', shipToCountry: order?.shipTo?.country || '',
-            itemIndex: idx, itemName: it?.name || '', itemSku: (it?.sku || '').trim(), itemQty: it?.quantity ?? '',
-            itemProductId: it?.productId ?? '', itemOrderItemId: it?.orderItemId ?? it?.itemId ?? '',
-            customsIndex: link?.index ?? '', customsDesc: link ? (customs[link.index]?.description ?? '') : '', customsHS: link ? (getHS(customs[link.index]) || '') : '',
-            customsQty: link ? (customs[link.index]?.quantity ?? '') : '', customsValue: link ? (customs[link.index]?.value ?? '') : '',
-            mappingSource: link?.source || '', mappingConfidence: typeof link?.confidence === 'number' ? link.confidence : '',
-            rule: a?.rule || '', recommendedDesc: a?.mapped ?? '', recommendedHS: a && a.hsNew !== a.hs ? a.hsNew : '', willChange: a ? (a.willChange ? 'YES' : 'NO') : ''
+      
+      const items = Array.isArray(order.items) ? order.items : [];
+      const customs = Array.isArray(order.internationalOptions?.customsItems) ? order.internationalOptions.customsItems : [];
+      
+      // Create ONE row per item in the order
+      items.forEach((item, itemIdx) => {
+        // Find best matching customs entry for this specific item
+        let bestCustomsMatch = null;
+        let bestAnalysis = null;
+        let matchMethod = 'NONE';
+        
+        // Try exact SKU match first
+        if (item.sku) {
+          const customsIdx = customs.findIndex(c => 
+            String(c.sku || '').trim().toUpperCase() === String(item.sku).trim().toUpperCase()
+          );
+          if (customsIdx >= 0) {
+            bestCustomsMatch = customs[customsIdx];
+            bestAnalysis = analysis?.[customsIdx];
+            matchMethod = 'SKU';
+          }
+        }
+        
+        // Try name matching if no SKU match
+        if (!bestCustomsMatch && item.name) {
+          // Look for best name match
+          let bestScore = 0;
+          let bestIdx = -1;
+          
+          customs.forEach((c, idx) => {
+            const itemName = String(item.name || '').toLowerCase();
+            const customsDesc = String(c.description || '').toLowerCase();
+            
+            // Calculate similarity score
+            let score = 0;
+            if (itemName === customsDesc) score = 1.0;
+            else if (itemName.includes(customsDesc) || customsDesc.includes(itemName)) score = 0.8;
+            else {
+              // Check for common words
+              const itemWords = itemName.split(/\s+/);
+              const customsWords = customsDesc.split(/\s+/);
+              const commonWords = itemWords.filter(w => customsWords.includes(w)).length;
+              score = commonWords / Math.max(itemWords.length, customsWords.length);
+            }
+            
+            if (score > bestScore) {
+              bestScore = score;
+              bestIdx = idx;
+            }
           });
+          
+          if (bestIdx >= 0 && bestScore > 0.3) {
+            bestCustomsMatch = customs[bestIdx];
+            bestAnalysis = analysis?.[bestIdx];
+            matchMethod = `NAME_${Math.round(bestScore * 100)}%`;
+          }
+        }
+        
+        // Determine what the product type likely is from the name
+        const productType = identifyProductFromTitle(item.name);
+        const suggestedHS = productType ? getCorrectHSAndDescription(productType)?.hs : '';
+        const suggestedDesc = productType ? getCorrectHSAndDescription(productType)?.desc : '';
+        
+        rows.push({
+          // Order info
+          orderId: order.orderId,
+          orderNumber: order.orderNumber,
+          orderDate: order.orderDate,
+          orderStatus: order.orderStatus,
+          shipToCity: order?.shipTo?.city || '',
+          shipToState: order?.shipTo?.state || '',
+          shipToCountry: order?.shipTo?.country || '',
+          
+          // Actual item from order
+          itemName: item?.name || '',
+          itemSku: String(item?.sku || '').trim(),
+          itemQty: item?.quantity || 1,
+          itemUnitPrice: item?.unitPrice || '',
+          itemProductId: item?.productId || '',
+          
+          // Current customs match (if any)
+          currentCustomsDesc: bestCustomsMatch?.description || 'NOT MATCHED',
+          currentCustomsHS: bestCustomsMatch ? getHS(bestCustomsMatch) : '',
+          currentCustomsValue: bestCustomsMatch?.value || '',
+          
+          // Suggested based on product name
+          suggestedDesc: suggestedDesc || bestAnalysis?.mapped || '',
+          suggestedHS: suggestedHS || bestAnalysis?.hsNew || '',
+          
+          // Match quality
+          matchMethod: matchMethod,
+          needsUpdate: bestAnalysis?.willChange ? 'YES' : 'NO'
         });
-      } else {
-        customs.forEach((ci, cidx) => {
-          const link = customsSkuPlan.find(c => c.index === cidx) || null;
-          const item = link && typeof link.itemIndex === 'number' ? items[link.itemIndex] : null;
-          const a = analysisByIndex.get(cidx);
-          rows.push({
-            orderId: order.orderId, orderNumber: order.orderNumber, orderDate: order.orderDate, orderStatus: order.orderStatus,
-            shipToCity: order?.shipTo?.city || '', shipToState: order?.shipTo?.state || '', shipToCountry: order?.shipTo?.country || '',
-            customsIndex: cidx, customsDesc: ci?.description || '', customsHS: getHS(ci) || '', customsQty: ci?.quantity ?? '', customsValue: ci?.value ?? '',
-            itemIndex: link?.itemIndex ?? '', itemName: item?.name || '', itemSku: (item?.sku || '').trim(), itemQty: item?.quantity ?? '',
-            itemProductId: item?.productId ?? '', itemOrderItemId: item?.orderItemId ?? item?.itemId ?? '',
-            mappingSource: link?.source || '', mappingConfidence: typeof link?.confidence === 'number' ? link.confidence : '',
-            rule: a?.rule || '', recommendedDesc: a?.mapped ?? '', recommendedHS: a && a.hsNew !== a.hs ? a.hsNew : '', willChange: a ? (a.willChange ? 'YES' : 'NO') : ''
-          });
-        });
-      }
+      });
     }
 
-    const headers = (mode === 'item')
-      ? ['orderId','orderNumber','orderDate','orderStatus','shipToCity','shipToState','shipToCountry','itemIndex','itemName','itemSku','itemQty','itemProductId','itemOrderItemId','customsIndex','customsDesc','customsHS','customsQty','customsValue','mappingSource','mappingConfidence','rule','recommendedDesc','recommendedHS','willChange']
-      : ['orderId','orderNumber','orderDate','orderStatus','shipToCity','shipToState','shipToCountry','customsIndex','customsDesc','customsHS','customsQty','customsValue','itemIndex','itemName','itemSku','itemQty','itemProductId','itemOrderItemId','mappingSource','mappingConfidence','rule','recommendedDesc','recommendedHS','willChange'];
+    const headers = [
+      'orderId', 'orderNumber', 'orderDate', 'orderStatus',
+      'shipToCity', 'shipToState', 'shipToCountry',
+      'itemName', 'itemSku', 'itemQty', 'itemUnitPrice', 'itemProductId',
+      'currentCustomsDesc', 'currentCustomsHS', 'currentCustomsValue',
+      'suggestedDesc', 'suggestedHS',
+      'matchMethod', 'needsUpdate'
+    ];
 
     const out = [csvLine(headers)];
     rows.forEach(r => out.push(csvLine(headers.map(h => r[h]))));
-
+    
     const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+    const csv = out.join('\n');
+    
+    // Save backup copy locally
+    try {
+      const exportsDir = path.join(__dirname, '../exports');
+      await fs.mkdir(exportsDir, { recursive: true });
+      const filename = `shipstation_usa_${scope}_products_${stamp}.csv`;
+      const filepath = path.join(exportsDir, filename);
+      await fs.writeFile(filepath, csv);
+      console.log(`✅ CSV saved locally: ${filepath}`);
+    } catch (saveErr) {
+      console.error('Failed to save backup:', saveErr);
+    }
+    
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="shipstation_usa_${scope}_${mode}_${stamp}.csv"`);
-    res.send(out.join('\n'));
+    res.setHeader('Content-Disposition', `attachment; filename="shipstation_usa_${scope}_products_${stamp}.csv"`);
+    res.send(csv);
+    
   } catch (err) {
     const status = err.response?.status || err.status || 500;
     const msg = err.response?.data?.message || err.response?.data || err.message;
@@ -417,7 +572,7 @@ router.get('/api/shipstation/orders/export.csv', requireAuthApi, async (req, res
   }
 });
 
-// Also fix the bulk-update route - find this section and replace the payload:
+// Bulk update route
 router.post('/api/shipstation/orders/bulk-update', requireAuthApi, async (req, res) => {
   try {
     const { orderIds } = req.body || {};
@@ -543,7 +698,6 @@ router.post('/api/shipstation/orders/bulk-update', requireAuthApi, async (req, r
   }
 });
 
-
 // Preview one order
 router.get('/api/shipstation/orders/:orderId/preview', requireAuthApi, async (req, res) => {
   try {
@@ -599,7 +753,7 @@ router.get('/api/shipstation/orders/:orderId/preview', requireAuthApi, async (re
   }
 });
 
-// Replace the handleOrderUpdate function in routes/shipstation.js
+// Handle order update
 async function handleOrderUpdate(req, res) {
   console.log(`\n=== ROUTE HIT: ${req.method} ${req.originalUrl} ===`);
   try {
@@ -711,6 +865,800 @@ async function handleOrderUpdate(req, res) {
     return res.status(status || 400).json({ error: message });
   }
 }
+
+// Single order export route
+router.get('/api/shipstation/orders/export-single.csv', requireAuthApi, async (req, res) => {
+  try {
+    const orderId = req.query.orderId;
+    if (!orderId) {
+      return res.status(400).json({ error: 'Order ID required' });
+    }
+    
+    const order = await loadOrderByAnyRef(orderId);
+    if (!order) {
+      return res.status(404).json({ error: `Order not found: ${orderId}` });
+    }
+    
+    if (!isUS(order)) {
+      return res.status(400).json({ error: 'Order is not shipping to US' });
+    }
+    
+    const { canUpdate, analysis } = buildCustomsPatch(order);
+    const items = Array.isArray(order.items) ? order.items : [];
+    const customs = Array.isArray(order.internationalOptions?.customsItems) ? order.internationalOptions.customsItems : [];
+    
+    console.log(`\nOrder ${order.orderNumber}: ${items.length} items, ${customs.length} customs entries`);
+    
+    const rows = [];
+    const availableCustomsIndices = new Set();
+    customs.forEach((_, idx) => availableCustomsIndices.add(idx));
+    
+    // Track if this is the first row for the order
+    let isFirstRow = true;
+    
+    // Match each item to an appropriate customs declaration
+    items.forEach((item, itemIdx) => {
+      console.log(`\nMatching item: "${item.name}"`);
+      
+      const itemType = identifyProductFromTitle(item.name);
+      console.log(`  Detected type: ${itemType || 'unknown'}`);
+      
+      let bestMatch = null;
+      let bestIdx = -1;
+      let matchMethod = 'NONE';
+      
+      for (const cidx of availableCustomsIndices) {
+        const c = customs[cidx];
+        const customsDesc = String(c.description || '').toLowerCase();
+        const customsHS = getHS(c);
+        
+        let isMatch = false;
+        let matchReason = '';
+        
+        if (itemType) {
+          const correctForType = getCorrectHSAndDescription(itemType);
+          
+          if (correctForType && customsHS && normHS(customsHS) === normHS(correctForType.hs)) {
+            isMatch = true;
+            matchReason = `HS_MATCH_${itemType}`;
+          }
+          else if (itemType === 'notebook' && customsDesc.includes('notebook')) {
+            isMatch = true;
+            matchReason = 'DESC_NOTEBOOK';
+          }
+          else if (itemType === 'planner' && customsDesc.includes('planner')) {
+            isMatch = true;
+            matchReason = 'DESC_PLANNER';
+          }
+          else if (itemType === 'sticker' && customsDesc.includes('sticker')) {
+            isMatch = true;
+            matchReason = 'DESC_STICKER';
+          }
+          else if (itemType === 'sticky' && customsDesc.includes('sticky')) {
+            isMatch = true;
+            matchReason = 'DESC_STICKY';
+          }
+          else if (itemType === 'insert' && (customsDesc.includes('insert') || customsDesc.includes('refill'))) {
+            isMatch = true;
+            matchReason = 'DESC_INSERT';
+          }
+        }
+        
+        if (!isMatch) {
+          const itemLower = String(item.name || '').toLowerCase();
+          
+          const categories = [
+            { keywords: ['notebook', 'journal'], customsTerms: ['notebook', 'journal'] },
+            { keywords: ['planner', 'agenda'], customsTerms: ['planner', 'agenda', 'diary'] },
+            { keywords: ['sticky', 'post-it'], customsTerms: ['sticky', 'notepad'] },
+            { keywords: ['sticker'], customsTerms: ['sticker'] },
+            { keywords: ['insert', 'refill'], customsTerms: ['insert', 'refill', 'loose'] },
+            { keywords: ['tab', 'tabs'], customsTerms: ['sticker', 'paper'] },
+            { keywords: ['pen'], customsTerms: ['pen'] },
+            { keywords: ['tape', 'washi'], customsTerms: ['tape'] },
+            { keywords: ['clip'], customsTerms: ['clip'] },
+            { keywords: ['charm'], customsTerms: ['charm'] },
+            { keywords: ['elastic'], customsTerms: ['elastic'] }
+          ];
+          
+          for (const cat of categories) {
+            const hasItemKeyword = cat.keywords.some(k => itemLower.includes(k));
+            const hasCustomsKeyword = cat.customsTerms.some(t => customsDesc.includes(t));
+            
+            if (hasItemKeyword && hasCustomsKeyword) {
+              isMatch = true;
+              matchReason = `CATEGORY_${cat.keywords[0].toUpperCase()}`;
+              break;
+            }
+          }
+        }
+        
+        if (isMatch && item.quantity === c.quantity) {
+          matchReason += '_QTY';
+        }
+        
+        if (isMatch) {
+          bestMatch = c;
+          bestIdx = cidx;
+          matchMethod = matchReason;
+          console.log(`  ✓ Matched to customs[${cidx}]: "${c.description}" via ${matchReason}`);
+          break;
+        }
+      }
+      
+      if (!bestMatch && availableCustomsIndices.size > 0) {
+        const firstAvailable = Array.from(availableCustomsIndices)[0];
+        bestMatch = customs[firstAvailable];
+        bestIdx = firstAvailable;
+        matchMethod = 'FALLBACK';
+        console.log(`  → Fallback to customs[${firstAvailable}]: "${bestMatch.description}"`);
+      }
+      
+      if (bestIdx >= 0) {
+        availableCustomsIndices.delete(bestIdx);
+      }
+      
+      const bestAnalysis = bestIdx >= 0 ? analysis?.[bestIdx] : null;
+      const productType = itemType || identifyProductFromTitle(item.name);
+      const correct = productType ? getCorrectHSAndDescription(productType) : null;
+      
+      rows.push({
+        // Order info - only show on first row
+        orderId: isFirstRow ? order.orderId : '',
+        orderNumber: isFirstRow ? order.orderNumber : '',
+        orderDate: isFirstRow ? order.orderDate : '',
+        orderStatus: isFirstRow ? order.orderStatus : '',
+        shipToCity: isFirstRow ? (order?.shipTo?.city || '') : '',
+        shipToState: isFirstRow ? (order?.shipTo?.state || '') : '',
+        
+        // Item details - always show
+        itemIndex: itemIdx,
+        itemName: item?.name || '',
+        itemSku: String(item?.sku || '').trim(),
+        itemQty: item?.quantity || 1,
+        itemUnitPrice: item?.unitPrice || '',
+        
+        // Matched customs - always show
+        currentCustomsDesc: bestMatch?.description || '',
+        currentCustomsHS: bestMatch ? getHS(bestMatch) : '',
+        currentCustomsQty: bestMatch?.quantity || '',
+        currentCustomsValue: bestMatch?.value || '',
+        
+        // Suggestions - always show
+        suggestedDesc: correct?.desc || bestAnalysis?.mapped || '',
+        suggestedHS: correct?.hs || bestAnalysis?.hsNew || '',
+        
+        // Metadata - always show
+        matchMethod: matchMethod,
+        productTypeDetected: productType || ''
+      });
+      
+      // After first row, set flag to false
+      isFirstRow = false;
+    });
+    
+    // Add any remaining unmatched customs entries
+    availableCustomsIndices.forEach(cidx => {
+      const c = customs[cidx];
+      console.log(`\nUnmatched customs[${cidx}]: "${c.description}"`);
+      
+      rows.push({
+        // No order info for orphaned customs rows
+        orderId: '',
+        orderNumber: '',
+        orderDate: '',
+        orderStatus: '',
+        shipToCity: '',
+        shipToState: '',
+        
+        itemIndex: '',
+        itemName: '>>> UNMATCHED CUSTOMS <<<',
+        itemSku: c.sku || '',
+        itemQty: '',
+        itemUnitPrice: '',
+        
+        currentCustomsDesc: c.description || '',
+        currentCustomsHS: getHS(c) || '',
+        currentCustomsQty: c.quantity || '',
+        currentCustomsValue: c.value || '',
+        
+        suggestedDesc: '',
+        suggestedHS: '',
+        
+        matchMethod: 'ORPHANED',
+        productTypeDetected: ''
+      });
+    });
+    
+    const headers = [
+      'orderId', 'orderNumber', 'orderDate', 'orderStatus',
+      'shipToCity', 'shipToState',
+      'itemIndex', 'itemName', 'itemSku', 'itemQty', 'itemUnitPrice',
+      'currentCustomsDesc', 'currentCustomsHS', 'currentCustomsQty', 'currentCustomsValue',
+      'suggestedDesc', 'suggestedHS',
+      'matchMethod', 'productTypeDetected'
+    ];
+    
+    const out = [csvLine(headers)];
+    rows.forEach(r => out.push(csvLine(headers.map(h => r[h]))));
+    
+    const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+    const csv = out.join('\n');
+    
+    // Save backup copy locally
+    try {
+      const exportsDir = path.join(__dirname, '../exports');
+      await fs.mkdir(exportsDir, { recursive: true });
+      const filename = `shipstation_order_${order.orderNumber}_test_${stamp}.csv`;
+      const filepath = path.join(exportsDir, filename);
+      await fs.writeFile(filepath, csv);
+      console.log(`✅ CSV saved locally: ${filepath}`);
+    } catch (saveErr) {
+      console.error('Failed to save backup:', saveErr);
+    }
+    
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="shipstation_order_${order.orderNumber}_test_${stamp}.csv"`);
+    res.send(csv);
+    
+  } catch (err) {
+    const status = err.response?.status || err.status || 500;
+    const msg = err.response?.data?.message || err.response?.data || err.message;
+    res.status(status).json({ error: msg });
+  }
+});
+
+// Bulk export route (50 orders)
+router.get('/api/shipstation/orders/export-bulk.csv', requireAuthApi, async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(365, Number(req.query.days || 30)));
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 50)));
+    
+    const since = new Date(Date.now() - days * 864e5).toISOString();
+    const statuses = ['awaiting_payment', 'awaiting_shipment', 'on_hold', 'shipped'];
+    
+    console.log(`Starting bulk export: ${limit} US orders from last ${days} days`);
+    
+    // Collect US orders
+    const orders = [];
+    const seen = new Set();
+    
+    for (const status of statuses) {
+      if (orders.length >= limit) break;
+      
+      let page = 1;
+      const maxPages = 5;
+      
+      while (page <= maxPages && orders.length < limit) {
+        await delay(1500); // Rate limit protection
+        
+        const list = await shipstation.searchOrders({
+          modifyDateStart: since,
+          orderStatus: status,
+          sortBy: 'ModifyDate',
+          sortDir: 'DESC',
+          page,
+          pageSize: 100
+        });
+        
+        if (!list.length) break;
+        
+        for (const o of list) {
+          if (orders.length >= limit) break;
+          if (seen.has(o.orderId)) continue;
+          seen.add(o.orderId);
+          
+          if (!isUS(o)) continue;
+          
+          await delay(100);
+          const full = await shipstation.getOrder(o.orderId);
+          orders.push(full);
+          console.log(`  Added order ${orders.length}/${limit}: #${full.orderNumber}`);
+        }
+        
+        if (list.length < 100) break;
+        page++;
+      }
+    }
+    
+    console.log(`Processing ${orders.length} US orders for export`);
+    
+    // Build CSV rows for all orders
+    const allRows = [];
+    
+    for (const order of orders) {
+      const { canUpdate, analysis } = buildCustomsPatch(order);
+      const items = Array.isArray(order.items) ? order.items : [];
+      const customs = Array.isArray(order.internationalOptions?.customsItems) ? order.internationalOptions.customsItems : [];
+      
+      const availableCustomsIndices = new Set();
+      customs.forEach((_, idx) => availableCustomsIndices.add(idx));
+      
+      let isFirstRowForOrder = true;
+      
+      // Process each item in the order
+      items.forEach((item, itemIdx) => {
+        const itemType = identifyProductFromTitle(item.name);
+        
+        let bestMatch = null;
+        let bestIdx = -1;
+        let matchMethod = 'NONE';
+        
+        // Find matching customs entry by product type
+        for (const cidx of availableCustomsIndices) {
+          const c = customs[cidx];
+          const customsDesc = String(c.description || '').toLowerCase();
+          const customsHS = getHS(c);
+          
+          let isMatch = false;
+          let matchReason = '';
+          
+          // Product type matching logic
+          if (itemType) {
+            const correctForType = getCorrectHSAndDescription(itemType);
+            
+            if (correctForType && customsHS && normHS(customsHS) === normHS(correctForType.hs)) {
+              isMatch = true;
+              matchReason = `HS_${itemType}`;
+            }
+            else if (
+              (itemType === 'notebook' && customsDesc.includes('notebook')) ||
+              (itemType === 'planner' && customsDesc.includes('planner')) ||
+              (itemType === 'sticker' && customsDesc.includes('sticker')) ||
+              (itemType === 'sticky' && customsDesc.includes('sticky')) ||
+              (itemType === 'insert' && (customsDesc.includes('insert') || customsDesc.includes('refill')))
+            ) {
+              isMatch = true;
+              matchReason = `TYPE_${itemType}`;
+            }
+          }
+          
+          // Category-based fallback
+          if (!isMatch) {
+            const itemLower = String(item.name || '').toLowerCase();
+            const categories = [
+              { keywords: ['notebook', 'journal'], customsTerms: ['notebook', 'journal'] },
+              { keywords: ['planner', 'agenda'], customsTerms: ['planner', 'agenda', 'diary'] },
+              { keywords: ['sticky', 'post-it'], customsTerms: ['sticky', 'notepad'] },
+              { keywords: ['sticker', 'tab'], customsTerms: ['sticker'] },
+              { keywords: ['insert', 'refill'], customsTerms: ['insert', 'refill', 'loose'] }
+            ];
+            
+            for (const cat of categories) {
+              if (cat.keywords.some(k => itemLower.includes(k)) && 
+                  cat.customsTerms.some(t => customsDesc.includes(t))) {
+                isMatch = true;
+                matchReason = `CAT_${cat.keywords[0]}`;
+                break;
+              }
+            }
+          }
+          
+          if (isMatch) {
+            bestMatch = c;
+            bestIdx = cidx;
+            matchMethod = matchReason;
+            break;
+          }
+        }
+        
+        // Fallback if no match
+        if (!bestMatch && availableCustomsIndices.size > 0) {
+          const firstAvailable = Array.from(availableCustomsIndices)[0];
+          bestMatch = customs[firstAvailable];
+          bestIdx = firstAvailable;
+          matchMethod = 'FALLBACK';
+        }
+        
+        if (bestIdx >= 0) {
+          availableCustomsIndices.delete(bestIdx);
+        }
+        
+        const bestAnalysis = bestIdx >= 0 ? analysis?.[bestIdx] : null;
+        const productType = itemType || '';
+        const correct = productType ? getCorrectHSAndDescription(productType) : null;
+        
+        allRows.push({
+          // Order info - only on first row of each order
+          orderId: isFirstRowForOrder ? order.orderId : '',
+          orderNumber: isFirstRowForOrder ? order.orderNumber : '',
+          orderDate: isFirstRowForOrder ? order.orderDate : '',
+          orderStatus: isFirstRowForOrder ? order.orderStatus : '',
+          shipToCity: isFirstRowForOrder ? (order?.shipTo?.city || '') : '',
+          shipToState: isFirstRowForOrder ? (order?.shipTo?.state || '') : '',
+          
+          // Item details
+          itemIndex: itemIdx,
+          itemName: item?.name || '',
+          itemSku: String(item?.sku || '').trim(),
+          itemQty: item?.quantity || 1,
+          itemUnitPrice: item?.unitPrice || '',
+          
+          // Matched customs
+          currentCustomsDesc: bestMatch?.description || '',
+          currentCustomsHS: bestMatch ? getHS(bestMatch) : '',
+          currentCustomsQty: bestMatch?.quantity || '',
+          currentCustomsValue: bestMatch?.value || '',
+          
+          // Suggestions
+          suggestedDesc: correct?.desc || bestAnalysis?.mapped || '',
+          suggestedHS: correct?.hs || bestAnalysis?.hsNew || '',
+          
+          // Metadata
+          matchMethod: matchMethod,
+          productTypeDetected: productType || ''
+        });
+        
+        isFirstRowForOrder = false;
+      });
+      
+      // Add unmatched customs as orphaned rows
+      availableCustomsIndices.forEach(cidx => {
+        const c = customs[cidx];
+        allRows.push({
+          orderId: '', orderNumber: '', orderDate: '', orderStatus: '', shipToCity: '', shipToState: '',
+          itemIndex: '',
+          itemName: '>>> UNMATCHED CUSTOMS <<<',
+          itemSku: c.sku || '',
+          itemQty: '',
+          itemUnitPrice: '',
+          currentCustomsDesc: c.description || '',
+          currentCustomsHS: getHS(c) || '',
+          currentCustomsQty: c.quantity || '',
+          currentCustomsValue: c.value || '',
+          suggestedDesc: '',
+          suggestedHS: '',
+          matchMethod: 'ORPHANED',
+          productTypeDetected: ''
+        });
+      });
+    }
+    
+    // Generate CSV
+    const headers = [
+      'orderId', 'orderNumber', 'orderDate', 'orderStatus',
+      'shipToCity', 'shipToState',
+      'itemIndex', 'itemName', 'itemSku', 'itemQty', 'itemUnitPrice',
+      'currentCustomsDesc', 'currentCustomsHS', 'currentCustomsQty', 'currentCustomsValue',
+      'suggestedDesc', 'suggestedHS',
+      'matchMethod', 'productTypeDetected'
+    ];
+    
+    const out = [csvLine(headers)];
+    allRows.forEach(r => out.push(csvLine(headers.map(h => r[h]))));
+    
+    const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+    const csv = out.join('\n');
+    
+    // Save backup copy locally
+    try {
+      const exportsDir = path.join(__dirname, '../exports');
+      await fs.mkdir(exportsDir, { recursive: true });
+      const filename = `shipstation_${orders.length}_orders_${stamp}.csv`;
+      const filepath = path.join(exportsDir, filename);
+      await fs.writeFile(filepath, csv);
+      console.log(`✅ CSV saved locally: ${filepath}`);
+    } catch (saveErr) {
+      console.error('Failed to save backup:', saveErr);
+    }
+    
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="shipstation_${orders.length}_orders_${stamp}.csv"`);
+    res.send(csv);
+    
+    console.log(`Export complete: ${orders.length} orders, ${allRows.length} rows`);
+    
+  } catch (err) {
+    const status = err.response?.status || err.status || 500;
+    const msg = err.response?.data?.message || err.response?.data || err.message;
+    console.error('Export error:', msg);
+    res.status(status).json({ error: msg });
+  }
+});
+
+// Export ALL US orders route - CORRECTED VERSION
+router.get('/api/shipstation/orders/export-all.csv', requireAuthApi, async (req, res) => {
+  try {
+    const days = Math.max(1, Math.min(365, Number(req.query.days || 30)));
+    const maxOrders = Math.max(50, Math.min(5000, Number(req.query.limit || 2000)));
+    
+    const since = new Date(Date.now() - days * 864e5).toISOString();
+    const statuses = ['awaiting_payment', 'awaiting_shipment', 'on_hold', 'shipped', 'cancelled'];
+    
+    // Rate limiting: 40 calls per minute = 1 call every 1.5 seconds
+    const API_DELAY = 1600; // milliseconds between API calls
+    
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`BULK EXPORT: Fetching up to ${maxOrders} US orders from last ${days} days`);
+    console.log(`Rate limit: 40 calls/min (${API_DELAY}ms between calls)`);
+    console.log(`Estimated time: ${Math.round(maxOrders * API_DELAY / 60000)} minutes`);
+    console.log(`${'='.repeat(70)}`);
+    
+    const startTime = Date.now();
+    const orders = [];
+    const seen = new Set();
+    let totalScanned = 0;
+    let apiCalls = 0;
+    
+    // First, collect order IDs from the list endpoints
+    console.log('\nPhase 1: Collecting order IDs...');
+    const orderIdsToFetch = [];
+    
+    for (const status of statuses) {
+      if (orderIdsToFetch.length >= maxOrders) break;
+      
+      console.log(`\nScanning ${status} orders...`);
+      let page = 1;
+      const maxPages = 50;
+      
+      while (page <= maxPages && orderIdsToFetch.length < maxOrders) {
+        await delay(API_DELAY);
+        apiCalls++;
+        
+        if (apiCalls % 20 === 0) {
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          console.log(`  [${elapsed}s] API calls: ${apiCalls}`);
+        }
+        
+        const list = await shipstation.searchOrders({
+          modifyDateStart: since,
+          orderStatus: status,
+          sortBy: 'ModifyDate',
+          sortDir: 'DESC',
+          page,
+          pageSize: 200
+        });
+        
+        if (!list.length) break;
+        
+        totalScanned += list.length;
+        console.log(`  Page ${page}: ${list.length} orders`);
+        
+        for (const o of list) {
+          if (orderIdsToFetch.length >= maxOrders) break;
+          if (seen.has(o.orderId)) continue;
+          seen.add(o.orderId);
+          
+          if (isUS(o)) {
+            orderIdsToFetch.push(o.orderId);
+          }
+        }
+        
+        if (list.length < 200) break;
+        page++;
+      }
+    }
+    
+    console.log(`\nPhase 1 complete: Found ${orderIdsToFetch.length} US orders (scanned ${totalScanned} total)`);
+    
+    // Phase 2: Fetch full order details
+    console.log(`\nPhase 2: Fetching full order details...`);
+    console.log(`This will take approximately ${Math.round(orderIdsToFetch.length * API_DELAY / 60000)} minutes`);
+    
+    for (let i = 0; i < orderIdsToFetch.length; i++) {
+      await delay(API_DELAY);
+      apiCalls++;
+      
+      const orderId = orderIdsToFetch[i];
+      const full = await shipstation.getOrder(orderId);
+      orders.push(full);
+      
+      // Progress updates
+      if ((i + 1) % 10 === 0) {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        const pct = Math.round((i + 1) / orderIdsToFetch.length * 100);
+        const remaining = Math.round((orderIdsToFetch.length - i - 1) * API_DELAY / 60000);
+        console.log(`  [${elapsed}s] ${i + 1}/${orderIdsToFetch.length} orders (${pct}%) - ~${remaining} min remaining`);
+      }
+    }
+    
+    const fetchTime = Math.round((Date.now() - startTime) / 1000);
+    console.log(`\nFetching complete in ${fetchTime} seconds (${apiCalls} API calls)`);
+    console.log('Processing orders for CSV export...\n');
+    
+    // Build CSV rows
+    const allRows = [];
+    
+    for (const order of orders) {
+      const { canUpdate, analysis } = buildCustomsPatch(order);
+      const items = Array.isArray(order.items) ? order.items : [];
+      const customs = Array.isArray(order.internationalOptions?.customsItems) ? order.internationalOptions.customsItems : [];
+      
+      const availableCustomsIndices = new Set();
+      customs.forEach((_, idx) => availableCustomsIndices.add(idx));
+      
+      let isFirstRowForOrder = true;
+      
+      // Process items
+      items.forEach((item, itemIdx) => {
+        const itemType = identifyProductFromTitle(item.name);
+        
+        let bestMatch = null;
+        let bestIdx = -1;
+        let matchMethod = 'NONE';
+        
+        // Match customs by product type
+        for (const cidx of availableCustomsIndices) {
+          const c = customs[cidx];
+          const customsDesc = String(c.description || '').toLowerCase();
+          const customsHS = getHS(c);
+          
+          let isMatch = false;
+          let matchReason = '';
+          
+          if (itemType) {
+            const correctForType = getCorrectHSAndDescription(itemType);
+            
+            if (correctForType && customsHS && normHS(customsHS) === normHS(correctForType.hs)) {
+              isMatch = true;
+              matchReason = `HS_${itemType}`;
+            }
+            else if (
+              (itemType === 'notebook' && customsDesc.includes('notebook')) ||
+              (itemType === 'planner' && customsDesc.includes('planner')) ||
+              (itemType === 'sticker' && customsDesc.includes('sticker')) ||
+              (itemType === 'sticky' && customsDesc.includes('sticky')) ||
+              (itemType === 'insert' && (customsDesc.includes('insert') || customsDesc.includes('refill'))) ||
+              (itemType === 'notepad' && customsDesc.includes('notepad'))
+            ) {
+              isMatch = true;
+              matchReason = `TYPE_${itemType}`;
+            }
+          }
+          
+          if (!isMatch) {
+            const itemLower = String(item.name || '').toLowerCase();
+            const rules = [
+              { item: ['notebook', 'journal'], customs: ['notebook', 'journal'] },
+              { item: ['planner', 'agenda'], customs: ['planner', 'agenda', 'diary'] },
+              { item: ['sticky'], customs: ['sticky', 'notepad'] },
+              { item: ['sticker', 'tab'], customs: ['sticker'] },
+              { item: ['insert', 'refill'], customs: ['insert', 'refill', 'loose'] }
+            ];
+            
+            for (const rule of rules) {
+              if (rule.item.some(k => itemLower.includes(k)) && 
+                  rule.customs.some(t => customsDesc.includes(t))) {
+                isMatch = true;
+                matchReason = `KEY_${rule.item[0]}`;
+                break;
+              }
+            }
+          }
+          
+          if (isMatch) {
+            bestMatch = c;
+            bestIdx = cidx;
+            matchMethod = matchReason;
+            break;
+          }
+        }
+        
+        if (!bestMatch && availableCustomsIndices.size > 0) {
+          const firstAvailable = Array.from(availableCustomsIndices)[0];
+          bestMatch = customs[firstAvailable];
+          bestIdx = firstAvailable;
+          matchMethod = 'FALLBACK';
+        }
+        
+        if (bestIdx >= 0) {
+          availableCustomsIndices.delete(bestIdx);
+        }
+        
+        const bestAnalysis = bestIdx >= 0 ? analysis?.[bestIdx] : null;
+        const productType = itemType || '';
+        const correct = productType ? getCorrectHSAndDescription(productType) : null;
+        
+        allRows.push({
+          orderId: isFirstRowForOrder ? order.orderId : '',
+          orderNumber: isFirstRowForOrder ? order.orderNumber : '',
+          orderDate: isFirstRowForOrder ? (order.orderDate || '').split('T')[0] : '',
+          orderStatus: isFirstRowForOrder ? order.orderStatus : '',
+          shipToCity: isFirstRowForOrder ? (order?.shipTo?.city || '') : '',
+          shipToState: isFirstRowForOrder ? (order?.shipTo?.state || '') : '',
+          
+          itemIndex: itemIdx,
+          itemName: item?.name || '',
+          itemSku: String(item?.sku || '').trim(),
+          itemQty: item?.quantity || 1,
+          itemUnitPrice: item?.unitPrice || '',
+          
+          currentCustomsDesc: bestMatch?.description || '',
+          currentCustomsHS: bestMatch ? getHS(bestMatch) : '',
+          currentCustomsQty: bestMatch?.quantity || '',
+          currentCustomsValue: bestMatch?.value || '',
+          
+          suggestedDesc: correct?.desc || bestAnalysis?.mapped || '',
+          suggestedHS: correct?.hs || bestAnalysis?.hsNew || '',
+          
+          matchMethod: matchMethod,
+          productTypeDetected: productType || ''
+        });
+        
+        isFirstRowForOrder = false;
+      });
+      
+      // Orphaned customs
+      availableCustomsIndices.forEach(cidx => {
+        const c = customs[cidx];
+        allRows.push({
+          orderId: '', orderNumber: '', orderDate: '', orderStatus: '', 
+          shipToCity: '', shipToState: '',
+          itemIndex: '',
+          itemName: '>>> UNMATCHED CUSTOMS <<<',
+          itemSku: c.sku || '',
+          itemQty: '',
+          itemUnitPrice: '',
+          currentCustomsDesc: c.description || '',
+          currentCustomsHS: getHS(c) || '',
+          currentCustomsQty: c.quantity || '',
+          currentCustomsValue: c.value || '',
+          suggestedDesc: '',
+          suggestedHS: '',
+          matchMethod: 'ORPHANED',
+          productTypeDetected: ''
+        });
+      });
+    }
+    
+    // Generate CSV
+    const headers = [
+      'orderId', 'orderNumber', 'orderDate', 'orderStatus',
+      'shipToCity', 'shipToState',
+      'itemIndex', 'itemName', 'itemSku', 'itemQty', 'itemUnitPrice',
+      'currentCustomsDesc', 'currentCustomsHS', 'currentCustomsQty', 'currentCustomsValue',
+      'suggestedDesc', 'suggestedHS',
+      'matchMethod', 'productTypeDetected'
+    ];
+    
+    const out = [csvLine(headers)];
+    allRows.forEach(r => out.push(csvLine(headers.map(h => r[h]))));
+    
+    const totalTime = Math.round((Date.now() - startTime) / 60000);
+    const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+    
+    // Create the CSV string
+    const csv = out.join('\n');
+    
+    // Save backup copy locally BEFORE sending response
+    try {
+      const exportsDir = path.join(__dirname, '../exports');
+      await fs.mkdir(exportsDir, { recursive: true });
+      const filename = `shipstation_ALL_${orders.length}_orders_${stamp}.csv`;
+      const filepath = path.join(exportsDir, filename);
+      await fs.writeFile(filepath, csv);
+      console.log(`✅ CSV saved locally: ${filepath}`);
+      console.log(`   To download: cat ${filepath} > ~/Desktop/${filename}`);
+    } catch (saveErr) {
+      console.error('Failed to save backup:', saveErr);
+      // Continue even if save fails - don't block the download
+    }
+    
+    // Send the response ONCE
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="shipstation_ALL_${orders.length}_orders_${stamp}.csv"`);
+    res.send(csv);
+    
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`EXPORT COMPLETE!`);
+    console.log(`- ${orders.length} orders exported`);
+    console.log(`- ${allRows.length} total CSV rows`);
+    console.log(`- ${apiCalls} API calls made`);
+    console.log(`- Total time: ${totalTime} minutes`);
+    console.log(`${'='.repeat(70)}\n`);
+    
+  } catch (err) {
+    const status = err.response?.status || err.status || 500;
+    const msg = err.response?.data?.message || err.response?.data || err.message;
+    console.error('Export error:', msg);
+    
+    if (status === 429) {
+      console.error('Rate limit hit! Consider increasing delays.');
+    }
+    
+    res.status(status).json({ error: msg });
+  }
+});
 
 router.post('/api/shipstation/orders/:orderId/update', requireAuthApi, handleOrderUpdate);
 router.get('/api/shipstation/orders/:orderId/update', requireAuthApi, handleOrderUpdate);

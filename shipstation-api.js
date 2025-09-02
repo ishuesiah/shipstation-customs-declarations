@@ -16,10 +16,29 @@ class ShipStationAPI {
     });
   }
 
+  // Helper for retry logic on rate limits
+  async retryWithBackoff(fn, maxRetries = 3) {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (err.response?.status === 429 && i < maxRetries - 1) {
+          const backoff = Math.pow(2, i) * 2000; // 2s, 4s, 8s
+          console.log(`Rate limited, waiting ${backoff}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, backoff));
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
+
   // ===== Orders =====
   async getOrder(orderId) {
-    const { data } = await this.client.get(`/orders/${encodeURIComponent(orderId)}`);
-    return data;
+    return this.retryWithBackoff(async () => {
+      const { data } = await this.client.get(`/orders/${encodeURIComponent(orderId)}`);
+      return data;
+    });
   }
 
   // Create or Update an order. If body contains orderId, it updates that order in-place.

@@ -45,12 +45,13 @@
 
     <!-- Main content -->
     <main class="main">
+      
       <!-- Bulk scan & fix card -->
       <div class="card">
         <h2 style="margin:0 0 .5rem 0">Bulk scan & fix (US orders)</h2>
         <div class="row" style="margin:.5rem 0 1rem 0">
           <label>Modified in last
-            <input id="bulkDays" class="input" type="number" value="30" min="1" max="180" style="width:90px">
+            <input id="bulkDays" class="input" type="number" value="30" min="1" max="365" style="width:90px">
             days
           </label>
           <label>Page size <input id="bulkPageSize" class="input" type="number" value="100" min="25" max="200" style="width:100px"></label>
@@ -60,9 +61,22 @@
           <button type="button" class="btn btn-secondary" id="btnExportMismatches">⬇ Export mismatches (CSV)</button>
           <button type="button" class="btn btn-secondary" id="btnExportAll">⬇ Export all USA (CSV)</button>
         </div>
-
         <div id="bulkStatus" class="status"></div>
+        <!-- In shipstation-editor.html, add this after the bulk status div -->
+        <div id="bulkTimer" style="display:none; color:#6b7280; font-size:0.9rem; margin:0.5rem 0;">
+          Scan time: <span id="scanTime">0</span> seconds | Found: <span id="foundCount">0</span> orders | Scanned: <span id="totalScanned">0</span> orders
+        </div>
+        
+        <div id="scanLog" style="display:none; margin:0.5rem 0; max-height:150px; overflow-y:auto; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:0.5rem; font-size:0.85rem; font-family:monospace;">
+          <div id="scanLogContent"></div>
+        </div>
+        
+        <div id="bulkActions" style="display:none; margin:0.5rem 0;">
+          <button class="btn btn-secondary" id="btnDownloadScanCSV">📥 Download Scan Results (CSV)</button>
+        </div>
+        
         <div class="footer-note">Note: applying fixes posts manual customs lines, so the "Customs SKU" column will appear blank after update.</div>
+      
 
         <div style="margin-top:10px; overflow:auto; max-height:420px; border:1px solid #e5e7eb; border-radius:10px;">
           <table id="bulkTable" style="width:100%; border-collapse:collapse;">
@@ -79,7 +93,36 @@
           </table>
         </div>
       </div>
-
+<!-- Add this new card after the bulk scan card -->
+<div class="card">
+  <h2 style="margin:0 0 .5rem 0">Test CSV Export (Single Order)</h2>
+  <p class="footer-note">Test the product-level CSV export with a single order before running bulk exports</p>
+  <div class="row" style="margin-top:.75rem">
+    <input id="testOrderId" class="input" placeholder="Enter ShipStation orderId or orderNumber" />
+    <button type="button" class="btn btn-secondary" id="btnTestExport">📥 Export Order as CSV</button>
+  </div>
+  <div id="testExportStatus" class="status"></div>
+</div>
+<div class="card">
+  <h2 style="margin:0 0 .5rem 0">Bulk CSV Export (50 US Orders)</h2>
+  <p class="footer-note">Export recent US orders with product-to-customs matching analysis</p>
+  <div class="row" style="margin-top:.75rem">
+    <label>Days back: <input id="bulkExportDays" class="input" type="number" value="30" min="1" max="365" style="width:90px"></label>
+    <button type="button" class="btn btn-secondary" id="btnExport50">📥 Export 50 US Orders as CSV</button>
+  </div>
+  <div id="bulkExportStatus" class="status"></div>
+</div>
+<!-- In the Export ALL USA Orders card, change the button ID -->
+<div class="card">
+  <h2 style="margin:0 0 .5rem 0">Export ALL USA Orders</h2>
+  <p class="footer-note">⚠️ This may take several minutes and generate a large file depending on order volume</p>
+  <div class="row" style="margin-top:.75rem">
+    <label>Days back: <input id="allExportDays" class="input" type="number" value="30" min="1" max="365" style="width:90px"></label>
+    <label>Max orders: <input id="allExportMax" class="input" type="number" value="500" min="50" max="2000" style="width:100px"></label>
+    <button type="button" class="btn btn-primary" id="btnExportAllOrders">📥 Export ALL US Orders as CSV</button>
+  </div>
+  <div id="allExportStatus" class="status"></div>
+</div>
       <!-- Single order update card -->
       <div class="card">
         <h2 style="margin:0 0 .5rem 0">Update customs <em>descriptions</em> for one US order</h2>
