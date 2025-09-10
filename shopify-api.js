@@ -1,4 +1,4 @@
-// shopify-api.js
+// shopify-api.js - Extended version with customer methods
 const axios = require('axios');
 const dotenv = require('dotenv');
 
@@ -36,7 +36,102 @@ class ShopifyAPI {
     this.lastRequestTime = Date.now();
   }
 
-  // -------- Fetch products (raw) -------------------------------------------
+  // -------- Customer Methods -------------------------------------------
+  
+  // Get all customers with their order statistics
+  async getVIPCustomers(minSpent = 1000) {
+    const customers = await this.getAllCustomers();
+    
+    // Filter customers who spent over the minimum
+    const vipCustomers = customers.filter(c => 
+      parseFloat(c.total_spent || 0) >= minSpent
+    );
+    
+    // Sort by total spent (descending)
+    vipCustomers.sort((a, b) => 
+      parseFloat(b.total_spent || 0) - parseFloat(a.total_spent || 0)
+    );
+    
+    // For each VIP customer, fetch their unfulfilled orders
+    const vipWithOrders = await Promise.all(
+      vipCustomers.map(async (customer) => {
+        await this.rateLimit();
+        
+        try {
+          // Fetch unfulfilled orders for this customer
+          const orders = await this.getCustomerOrders(customer.id, 'any');
+          const unfulfilledOrders = orders.filter(order => 
+            order.fulfillment_status !== 'fulfilled' && 
+            order.cancelled_at === null &&
+            ['pending', 'authorized', 'partially_paid', 'paid', 'partially_refunded'].includes(order.financial_status)
+          );
+          
+          return {
+            ...customer,
+            unfulfilled_orders: unfulfilledOrders,
+            unfulfilled_count: unfulfilledOrders.length,
+            unfulfilled_value: unfulfilledOrders.reduce((sum, order) => 
+              sum + parseFloat(order.total_price || 0), 0
+            )
+          };
+        } catch (error) {
+          console.error(`Error fetching orders for customer ${customer.id}:`, error.message);
+          return {
+            ...customer,
+            unfulfilled_orders: [],
+            unfulfilled_count: 0,
+            unfulfilled_value: 0
+          };
+        }
+      })
+    );
+    
+    return vipWithOrders;
+  }
+  
+  // Get all customers
+  async getAllCustomers() {
+    const customers = [];
+    let hasNextPage = true;
+    let pageInfo = null;
+    
+    while (hasNextPage) {
+      await this.rateLimit();
+      const query = pageInfo
+        ? `customers.json?limit=250&page_info=${pageInfo}`
+        : `customers.json?limit=250`;
+      
+      const response = await this.client.get(query);
+      customers.push(...response.data.customers);
+      
+      const linkHeader = response.headers['link'];
+      if (linkHeader && linkHeader.includes('rel="next"')) {
+        const match = linkHeader.match(/page_info=([^>]+)>; rel="next"/);
+        pageInfo = match ? match[1] : null;
+        hasNextPage = !!pageInfo;
+      } else {
+        hasNextPage = false;
+      }
+    }
+    
+    return customers;
+  }
+  
+  // Get orders for a specific customer
+  async getCustomerOrders(customerId, status = 'any') {
+    await this.rateLimit();
+    const response = await this.client.get('/orders.json', {
+      params: {
+        customer_id: customerId,
+        status: status,
+        limit: 250
+      }
+    });
+    return response.data.orders || [];
+  }
+
+  // -------- Existing Product Methods (unchanged) ------------------------
+  
   async getAllProducts(status = 'active') {
     const products = [];
     let hasNextPage = true;
@@ -66,7 +161,6 @@ class ShopifyAPI {
     return products;
   }
 
-  // -------- Hydrate InventoryItem fields onto variants ----------------------
   async getAllProductsWithInventory(status = 'active') {
     const products = await this.getAllProducts(status);
     await this.attachInventoryFields(products);
@@ -74,7 +168,6 @@ class ShopifyAPI {
   }
 
   async attachInventoryFields(products) {
-    // Collect unique inventory_item_ids
     const ids = [];
     products.forEach(p => p.variants.forEach(v => {
       if (v.inventory_item_id) ids.push(v.inventory_item_id);
@@ -82,7 +175,6 @@ class ShopifyAPI {
     const uniqueIds = [...new Set(ids)];
     if (uniqueIds.length === 0) return;
 
-    // Bulk fetch in chunks of 50 (safe for REST)
     const invMap = new Map();
     const chunkSize = 50;
     for (let i = 0; i < uniqueIds.length; i += chunkSize) {
@@ -95,12 +187,10 @@ class ShopifyAPI {
       items.forEach(it => invMap.set(it.id, it));
     }
 
-    // Attach to variants so UI can read them
     products.forEach(p => p.variants.forEach(v => {
       const it = invMap.get(v.inventory_item_id);
       if (it) {
         v.harmonized_system_code = it.harmonized_system_code || '';
-        // Shopify field name is country_code_of_origin
         v.country_code_of_origin = it.country_code_of_origin || it.country_of_origin || '';
       } else {
         v.harmonized_system_code = v.harmonized_system_code || '';
@@ -109,7 +199,6 @@ class ShopifyAPI {
     }));
   }
 
-  // -------- Update variants + inventory items -------------------------------
   async updateVariants(updates) {
     const results = { updated: 0, failed: 0, errors: [] };
 
@@ -122,7 +211,6 @@ class ShopifyAPI {
         const needsVariantUpdate = (sku !== undefined) || (price !== undefined) || (weight !== undefined) || Object.keys(rest).length > 0;
         const needsInventoryUpdate = (harmonized_system_code !== undefined) || (country_code_of_origin !== undefined);
 
-        // 1) Variant update (SKU/price/weight etc.)
         if (needsVariantUpdate) {
           const payload = { variant: { id } };
           if (sku !== undefined) payload.variant.sku = sku;
@@ -131,15 +219,12 @@ class ShopifyAPI {
             payload.variant.weight = parseFloat(weight);
             payload.variant.weight_unit = 'g';
           }
-          // pass-through any other allowed variant fields
           Object.assign(payload.variant, rest);
 
           await this.client.put(`/variants/${id}.json`, payload);
         }
 
-        // 2) Inventory item update (HS code / country of origin)
         if (needsInventoryUpdate) {
-          // We need the inventory_item_id for the variant
           await this.rateLimit();
           const vResp = await this.client.get(`/variants/${id}.json`);
           const inventoryItemId = vResp.data?.variant?.inventory_item_id;
@@ -153,7 +238,6 @@ class ShopifyAPI {
           await this.client.put(`/inventory_items/${inventoryItemId}.json`, invPayload);
         }
 
-        // Count once per update object
         results.updated++;
       } catch (error) {
         results.failed++;
@@ -167,7 +251,6 @@ class ShopifyAPI {
     return results;
   }
 
-  // Convenience helpers (kept from your file)
   async getProduct(productId) {
     await this.rateLimit();
     const response = await this.client.get(`/products/${productId}.json`);

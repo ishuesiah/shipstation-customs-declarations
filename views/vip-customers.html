@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIP Customers - Hemlock & Oak</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f7f7fb; color: #333; }
+    
+    /* Layout with sidebar */
+    .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+    .sidebar { background: #111827; color: #fff; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
+    .nav-title { font-weight: 700; opacity: .9; margin-bottom: .5rem; }
+    .nav-link { display: block; color: #c7cbe1; text-decoration: none; padding: .5rem .6rem; border-radius: 6px; }
+    .nav-link:hover { background: #1f2937; color: #fff; }
+    .nav-link.active { background: #4f46e5; color: #fff; }
+    
+    /* Main content area */
+    .main-content { display: flex; flex-direction: column; }
+    
+    /* Header */
+    .header { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+    .header h1 { font-size: 1.5rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-actions { display: flex; gap: 1rem; align-items: center; }
+    
+    /* Cache indicator */
+    .cache-indicator {
+      display: none;
+      padding: .25rem .5rem;
+      background: #f0f9ff;
+      border: 1px solid #0284c7;
+      color: #0284c7;
+      border-radius: 4px;
+      font-size: .85rem;
+      font-weight: 500;
+    }
+    .cache-indicator.show { display: inline-flex; align-items: center; gap: .5rem; }
+    .cache-indicator.stale { background: #fef3c7; border-color: #d97706; color: #d97706; }
+    
+    /* Stats cards */
+    .stats-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; padding: 1rem 2rem; background: #fff; border-bottom: 1px solid #e0e0e0; }
+    .stat-card { background: #f8f9fa; padding: 1rem; border-radius: 8px; border: 1px solid #e0e0e0; }
+    .stat-label { font-size: .8rem; color: #666; text-transform: uppercase; letter-spacing: .5px; margin-bottom: .5rem; }
+    .stat-value { font-size: 1.8rem; font-weight: 600; color: #333; }
+    .stat-sub { font-size: .9rem; color: #888; margin-top: .25rem; }
+    
+    /* Controls */
+    .controls { background: #fff; padding: 1.5rem 2rem; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+    .filter-group { display: flex; gap: .75rem; align-items: center; }
+    .search-box { flex: 1; max-width: 400px; }
+    .search-box input { width: 100%; padding: .5rem 1rem; border: 1px solid #e0e0e0; border-radius: 6px; font-size: .9rem; }
+    
+    /* Buttons */
+    .btn { padding: .5rem 1rem; border-radius: 6px; border: none; font-size: .9rem; cursor: pointer; transition: all .2s; font-weight: 500; }
+    .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(102,126,234,.3); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .btn-secondary { background: #fff; color: #666; border: 1px solid #e0e0e0; }
+    .btn-secondary:hover { background: #f5f5f5; }
+    
+    /* Select dropdown */
+    select { padding: .5rem 1rem; border: 1px solid #e0e0e0; border-radius: 6px; font-size: .9rem; background: #fff; }
+    
+    /* Table */
+    .table-container { background: #fff; margin: 1rem; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,.05); }
+    table { width: 100%; border-collapse: collapse; }
+    thead { background: #f8f9fa; border-bottom: 2px solid #e0e0e0; }
+    th { padding: 1rem; text-align: left; font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .5px; color: #666; cursor: pointer; user-select: none; }
+    th:hover { background: #f0f0f0; }
+    th.sorted-asc::after { content: ' ↑'; color: #667eea; }
+    th.sorted-desc::after { content: ' ↓'; color: #667eea; }
+    td { padding: .75rem 1rem; border-bottom: 1px solid #f0f0f0; }
+    tbody tr:hover { background: #f8f9fa; }
+    
+    /* Customer name link */
+    .customer-link { color: #667eea; text-decoration: none; font-weight: 500; }
+    .customer-link:hover { text-decoration: underline; }
+    
+    /* Order badges */
+    .order-badge { display: inline-block; padding: .2rem .5rem; border-radius: 4px; font-size: .75rem; font-weight: 600; }
+    .badge-unfulfilled { background: #fee; color: #c33; }
+    .badge-zero { background: #efe; color: #3c3; }
+    
+    /* Order details */
+    .order-details { font-size: .85rem; color: #666; }
+    .order-item { margin: .25rem 0; padding-left: 1rem; }
+    
+    /* Tags */
+    .customer-tags { display: flex; gap: .25rem; flex-wrap: wrap; }
+    .tag { display: inline-block; background: #e0e0e0; color: #666; padding: .15rem .4rem; border-radius: 3px; font-size: .75rem; }
+    .tag-vip { background: #ffd700; color: #333; }
+    
+    /* Loading */
+    .loading { display: none; text-align: center; padding: 3rem; }
+    .loading.active { display: block; }
+    .spinner { border: 3px solid #f3f3f3; border-top: 3px solid #667eea; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    
+    /* Enhanced loading message */
+    .loading-message {
+      margin-top: 1rem;
+      color: #666;
+    }
+    .loading-warning {
+      margin-top: .5rem;
+      color: #d97706;
+      font-size: .9rem;
+    }
+    
+    /* Status bar */
+    .status-bar { background: #fff; padding: 1rem 2rem; display: none; align-items: center; gap: 1rem; border-bottom: 1px solid #e0e0e0; }
+    .status-bar.active { display: flex; }
+    .status-bar.error { background: #fee; color: #c33; }
+    .status-bar.success { background: #efe; color: #3c3; }
+    .status-bar.info { background: #e0f2fe; color: #0369a1; }
+    
+    /* Expandable rows */
+    .expandable { cursor: pointer; }
+    .expandable:hover { background: #f0f4ff; }
+    .order-row-detail { display: none; background: #f8f9fa; }
+    .order-row-detail.expanded { display: table-row; }
+    .order-detail-cell { padding: 1rem 2rem; }
+    
+    /* Currency formatting */
+    .currency { font-family: 'SF Mono', Monaco, monospace; font-weight: 500; }
+    .currency.large { font-size: 1.1rem; color: #333; }
+    .currency.alert { color: #dc3545; }
+    
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 4rem 2rem;
+      color: #666;
+    }
+    .empty-state h3 {
+      color: #333;
+      margin-bottom: .5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="nav-title">Hemlock & Oak</div>
+      <a class="nav-link" href="/">Product Manager</a>
+      <a class="nav-link" href="/shipstation">ShipStation Customs</a>
+      <a class="nav-link active" href="/vip-customers">VIP Customers</a>
+      <div style="margin-top:auto"></div>
+      <a class="nav-link" href="/logout">Logout</a>
+    </aside>
+
+    <!-- Main content -->
+    <div class="main-content">
+      <!-- Header -->
+      <div class="header">
+        <h1>👑 VIP Customers</h1>
+        <div class="header-actions">
+          <div class="cache-indicator" id="cacheIndicator">
+            <span id="cacheText">Cached data</span>
+          </div>
+          <button class="btn btn-secondary" onclick="exportToCSV()">📥 Export CSV</button>
+          <button class="btn btn-primary" id="refreshBtn" onclick="refreshData(true)">🔄 Refresh</button>
+        </div>
+      </div>
+
+      <!-- Status Bar -->
+      <div id="statusBar" class="status-bar">
+        <span id="statusMessage"></span>
+      </div>
+
+      <!-- Stats Cards -->
+      <div class="stats-container">
+        <div class="stat-card">
+          <div class="stat-label">Total VIP Customers</div>
+          <div class="stat-value" id="totalVips">0</div>
+          <div class="stat-sub">Spent over $<span id="minThreshold">1,000</span></div>
+        </div>
+        <div class="stat-card" style="display:none;">
+          <div class="stat-label">Total Revenue</div>
+          <div class="stat-value">$<span id="totalRevenue">0</span></div>
+          <div class="stat-sub">Average: $<span id="avgRevenue">0</span></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Unfulfilled Orders</div>
+          <div class="stat-value" id="totalUnfulfilled">0</div>
+          <div class="stat-sub">Value: $<span id="unfulfilledValue">0</span></div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="controls">
+        <div class="filter-group">
+          <label>Min. Spent: 
+            <select id="minSpentFilter" onchange="updateMinSpent()">
+              <option value="1000" selected>$1,000+</option>
+              <option value="2500">$2,500+</option>
+              <option value="5000">$5,000+</option>
+              <option value="10000">$10,000+</option>
+            </select>
+          </label>
+          <label>Sort by:
+            <select id="sortBy" onchange="sortTable()">
+              <option value="spent_desc">Highest Spent ↓</option>
+              <option value="spent_asc">Lowest Spent ↑</option>
+              <option value="unfulfilled_desc">Most Unfulfilled ↓</option>
+              <option value="unfulfilled_value_desc">Unfulfilled Value ↓</option>
+            </select>
+          </label>
+        </div>
+        <div class="search-box">
+          <input type="text" id="searchInput" placeholder="Search by name, email, or tags..." onkeyup="filterTable()">
+        </div>
+      </div>
+
+      <!-- Loading -->
+      <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <div class="loading-message">
+          <p>Loading VIP customers from Shopify...</p>
+          <p class="loading-warning" id="loadingWarning" style="display:none;">This may take a minute on first load as we fetch order data for each customer.</p>
+        </div>
+      </div>
+
+      <!-- VIP Customers Table -->
+      <div class="table-container">
+        <table id="vipTable">
+          <thead>
+            <tr>
+              <th onclick="sortByColumn('name')">Customer</th>
+              <th onclick="sortByColumn('email')">Email</th>
+              <th onclick="sortByColumn('total_spent')" class="sorted-desc">Total Spent</th>
+              <th onclick="sortByColumn('orders_count')">Orders</th>
+              <th onclick="sortByColumn('unfulfilled_count')">Unfulfilled</th>
+              <th onclick="sortByColumn('unfulfilled_value')">Pending Value</th>
+              <th onclick="sortByColumn('created_at')">Customer Since</th>
+              <th>Tags</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="vipTableBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Empty state -->
+      <div id="emptyState" class="empty-state" style="display:none;">
+        <h3>No VIP Customers Found</h3>
+        <p>No customers have spent over $<span id="emptyThreshold">1,000</span> yet.</p>
+        <p style="margin-top:1rem;">Try lowering the minimum spent threshold to see more customers.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript -->
+  <script>
+    let vipCustomers = [];
+    let currentSort = 'spent_desc';
+    let minSpent = 1000;
+    let loadingTimer;
+
+    // Load data on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      loadVIPCustomers();
+    });
+
+    async function loadVIPCustomers(forceRefresh = false) {
+      const loading = document.getElementById('loading');
+      const statusBar = document.getElementById('statusBar');
+      const statusMessage = document.getElementById('statusMessage');
+      const cacheIndicator = document.getElementById('cacheIndicator');
+      const refreshBtn = document.getElementById('refreshBtn');
+      const emptyState = document.getElementById('emptyState');
+      const tableContainer = document.querySelector('.table-container');
+
+      loading.classList.add('active');
+      statusBar.className = 'status-bar';
+      cacheIndicator.classList.remove('show');
+      refreshBtn.disabled = true;
+      emptyState.style.display = 'none';
+      tableContainer.style.display = 'block';
+      
+      // Show warning after 3 seconds if still loading
+      loadingTimer = setTimeout(() => {
+        document.getElementById('loadingWarning').style.display = 'block';
+      }, 3000);
+
+      try {
+        const url = `/api/vip-customers?minSpent=${minSpent}&sortBy=${currentSort}${forceRefresh ? '&refresh=true' : ''}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (!response.ok) throw new Error(data.error);
+        
+        vipCustomers = data.customers || [];
+        updateStats(data.stats);
+        renderTable();
+        
+        // Show cache indicator
+        if (data.cached) {
+          cacheIndicator.classList.add('show');
+          const cacheAge = data.cache_age || 0;
+          const cacheText = document.getElementById('cacheText');
+          if (cacheAge < 60) {
+            cacheText.textContent = `Cached (${cacheAge}s ago)`;
+          } else {
+            const minutes = Math.round(cacheAge / 60);
+            cacheText.textContent = `Cached (${minutes}m ago)`;
+            if (minutes > 3) {
+              cacheIndicator.classList.add('stale');
+            }
+          }
+        } else if (data.fetch_time) {
+          statusBar.className = 'status-bar active info';
+          statusMessage.textContent = `Data fetched in ${data.fetch_time} seconds and cached for 5 minutes`;
+          setTimeout(() => { statusBar.className = 'status-bar'; }, 5000);
+        }
+
+        // Show empty state if no customers
+        if (vipCustomers.length === 0) {
+          emptyState.style.display = 'block';
+          tableContainer.style.display = 'none';
+          document.getElementById('emptyThreshold').textContent = formatNumber(minSpent);
+        } else {
+          statusBar.className = 'status-bar active success';
+          statusMessage.textContent = `Loaded ${vipCustomers.length} VIP customers successfully`;
+          setTimeout(() => { statusBar.className = 'status-bar'; }, 3000);
+        }
+      } catch (error) {
+        statusBar.className = 'status-bar active error';
+        const errorMsg = error.message || error.error || JSON.stringify(error);
+        statusMessage.textContent = 'Failed to load VIP customers: ' + errorMsg;
+        console.error('Full error details:', error);
+      } finally {
+        clearTimeout(loadingTimer);
+        document.getElementById('loadingWarning').style.display = 'none';
+        loading.classList.remove('active');
+        refreshBtn.disabled = false;
+      }
+    }
+
+    function updateStats(stats) {
+      document.getElementById('totalVips').textContent = stats.total_vips || 0;
+      document.getElementById('totalRevenue').textContent = formatNumber(stats.total_spent || 0);
+      document.getElementById('avgRevenue').textContent = formatNumber(stats.avg_spent || 0);
+      document.getElementById('totalUnfulfilled').textContent = stats.total_unfulfilled_orders || 0;
+      document.getElementById('unfulfilledValue').textContent = formatNumber(stats.total_unfulfilled_value || 0);
+      document.getElementById('minThreshold').textContent = formatNumber(minSpent);
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById('vipTableBody');
+      tbody.innerHTML = '';
+
+      vipCustomers.forEach(customer => {
+        const row = tbody.insertRow();
+        
+        // Customer Name
+        const nameCell = row.insertCell();
+        nameCell.innerHTML = `<a href="https://${getShopDomain()}/admin/customers/${customer.id}" target="_blank" class="customer-link">${customer.full_name || 'Unknown'}</a>`;
+        
+        // Email
+        row.insertCell().textContent = customer.email || '';
+        
+        // Total Spent
+        const spentCell = row.insertCell();
+        spentCell.innerHTML = `<span class="currency large">$${formatNumber(customer.total_spent)}</span>`;
+        
+        // Orders Count
+        row.insertCell().textContent = customer.orders_count || 0;
+        
+        // Unfulfilled Count
+        const unfulfilledCell = row.insertCell();
+        if (customer.unfulfilled_count > 0) {
+          unfulfilledCell.innerHTML = `<span class="order-badge badge-unfulfilled">${customer.unfulfilled_count}</span>`;
+        } else {
+          unfulfilledCell.innerHTML = `<span class="order-badge badge-zero">0</span>`;
+        }
+        
+        // Unfulfilled Value
+        const unfulfilledValueCell = row.insertCell();
+        if (customer.unfulfilled_value > 0) {
+          unfulfilledValueCell.innerHTML = `<span class="currency alert">$${formatNumber(customer.unfulfilled_value)}</span>`;
+        } else {
+          unfulfilledValueCell.textContent = '-';
+        }
+        
+        // Customer Since
+        const sinceCell = row.insertCell();
+        sinceCell.textContent = customer.created_at ? new Date(customer.created_at).toLocaleDateString() : '';
+        
+        // Tags
+        const tagsCell = row.insertCell();
+        if (customer.tags) {
+          const tags = customer.tags.split(',').map(tag => tag.trim()).filter(Boolean);
+          tagsCell.innerHTML = `<div class="customer-tags">${tags.map(tag => 
+            `<span class="tag ${tag.toLowerCase().includes('vip') ? 'tag-vip' : ''}">${tag}</span>`
+          ).join('')}</div>`;
+        }
+        
+        // Actions
+        const actionsCell = row.insertCell();
+        actionsCell.innerHTML = `
+          <button class="btn btn-secondary" onclick="viewCustomerDetails(${customer.id})" style="font-size:.8rem;padding:.3rem .6rem;">View Orders</button>
+        `;
+        
+        // Add expandable order details row
+        if (customer.unfulfilled_orders && customer.unfulfilled_orders.length > 0) {
+          row.classList.add('expandable');
+          row.onclick = () => toggleOrderDetails(customer.id);
+          
+          const detailRow = tbody.insertRow();
+          detailRow.id = `detail-${customer.id}`;
+          detailRow.className = 'order-row-detail';
+          const detailCell = detailRow.insertCell();
+          detailCell.colSpan = 9;
+          detailCell.className = 'order-detail-cell';
+          
+          let orderHtml = '<div class="order-details"><strong>Unfulfilled Orders:</strong>';
+          customer.unfulfilled_orders.forEach(order => {
+            orderHtml += `
+              <div class="order-item">
+                📦 Order ${order.name} - $${formatNumber(order.total_price)} - 
+                ${order.financial_status} - 
+                ${order.line_items_count} items - 
+                ${new Date(order.created_at).toLocaleDateString()}
+              </div>
+            `;
+          });
+          orderHtml += '</div>';
+          detailCell.innerHTML = orderHtml;
+        }
+        
+        // Add row data attributes for filtering
+        row.dataset.name = customer.full_name.toLowerCase();
+        row.dataset.email = customer.email.toLowerCase();
+        row.dataset.tags = (customer.tags || '').toLowerCase();
+      });
+    }
+
+    function toggleOrderDetails(customerId) {
+      const detailRow = document.getElementById(`detail-${customerId}`);
+      if (detailRow) {
+        detailRow.classList.toggle('expanded');
+      }
+    }
+
+    function viewCustomerDetails(customerId) {
+      window.open(`https://${getShopDomain()}/admin/customers/${customerId}`, '_blank');
+    }
+
+    function getShopDomain() {
+      // This should match your SHOPIFY_STORE env variable
+      return 'hemlock-and-oak.myshopify.com';
+    }
+
+    function formatNumber(num) {
+      return Number(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function sortTable() {
+      currentSort = document.getElementById('sortBy').value;
+      loadVIPCustomers();
+    }
+
+    function sortByColumn(column) {
+      const mapping = {
+        'name': 'name',
+        'email': 'email',
+        'total_spent': 'spent_desc',
+        'orders_count': 'orders',
+        'unfulfilled_count': 'unfulfilled_desc',
+        'unfulfilled_value': 'unfulfilled_value_desc',
+        'created_at': 'created'
+      };
+      
+      if (mapping[column]) {
+        currentSort = mapping[column];
+        document.getElementById('sortBy').value = currentSort;
+        loadVIPCustomers();
+      }
+    }
+
+    function updateMinSpent() {
+      minSpent = Number(document.getElementById('minSpentFilter').value);
+      loadVIPCustomers();
+    }
+
+    function filterTable() {
+      const searchValue = document.getElementById('searchInput').value.toLowerCase();
+      const rows = document.querySelectorAll('#vipTableBody tr:not(.order-row-detail)');
+      
+      rows.forEach(row => {
+        const name = row.dataset.name || '';
+        const email = row.dataset.email || '';
+        const tags = row.dataset.tags || '';
+        
+        const matches = name.includes(searchValue) || 
+                       email.includes(searchValue) || 
+                       tags.includes(searchValue);
+        
+        row.style.display = matches ? '' : 'none';
+        
+        // Also hide/show detail rows
+        const customerId = row.querySelector('.expandable')?.onclick?.toString().match(/\d+/)?.[0];
+        if (customerId) {
+          const detailRow = document.getElementById(`detail-${customerId}`);
+          if (detailRow) {
+            detailRow.style.display = matches ? '' : 'none';
+          }
+        }
+      });
+    }
+
+    function refreshData(force = false) {
+      loadVIPCustomers(force);
+    }
+
+    async function exportToCSV() {
+      const url = `/api/vip-customers/export?minSpent=${minSpent}`;
+      window.location.href = url;
+      
+      const statusBar = document.getElementById('statusBar');
+      const statusMessage = document.getElementById('statusMessage');
+      statusBar.className = 'status-bar active success';
+      statusMessage.textContent = 'Exporting VIP customers to CSV...';
+      setTimeout(() => { statusBar.className = 'status-bar'; }, 3000);
+    }
+  </script>
+</body>
+</html>
